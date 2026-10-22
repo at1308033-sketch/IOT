@@ -1,0 +1,120 @@
+{
+ "textures": {
+  "floor_wood": {
+   "diff": "textures/laminate_floor_02_diff_1k.jpg",
+   "nor": "textures/laminate_floor_02_nor_1k.jpg",
+   "arm": "textures/laminate_floor_02_arm_1k.jpg",
+   "repeat_mm": 85
+  },
+  "floor_tile_kitchen": {
+   "diff": "textures/interior_tiles_diff_1k.jpg",
+   "nor": "textures/interior_tiles_nor_1k.jpg",
+   "arm": "textures/interior_tiles_arm_1k.jpg",
+   "repeat_mm": 95
+  },
+  "wall_plaster": {
+   "diff": "textures/white_plaster_02_diff_1k.jpg",
+   "nor": "textures/white_plaster_02_nor_1k.jpg",
+   "arm": "textures/white_plaster_02_arm_1k.jpg",
+   "repeat_mm": 50
+  },
+  "wall_exterior": {
+   "diff": "textures/white_stucco_diff_1k.jpg",
+   "nor": "textures/white_stucco_nor_1k.jpg",
+   "arm": "textures/white_stucco_arm_1k.jpg",
+   "repeat_mm": 100
+  },
+  "paving": {
+   "diff": "textures/rectangular_paving_diff_1k.jpg",
+   "nor": "textures/rectangular_paving_nor_1k.jpg",
+   "arm": "textures/rectangular_paving_arm_1k.jpg",
+   "repeat_mm": 100
+  },
+  "grass": {
+   "diff": "textures/leafy_grass_diff_1k.jpg",
+   "nor": "textures/leafy_grass_nor_1k.jpg",
+   "arm": "textures/leafy_grass_arm_1k.jpg",
+   "repeat_mm": 100
+  },
+  "countertop": {
+   "diff": "textures/marble_01_diff_1k.jpg",
+   "nor": "textures/marble_01_nor_1k.jpg",
+   "arm": "textures/marble_01_arm_1k.jpg",
+   "repeat_mm": 75
+  },
+  "fabric_bed": {
+   "diff": "textures/rough_linen_diff_1k.jpg",
+   "nor": "textures/rough_linen_nor_1k.jpg",
+   "arm": "textures/rough_linen_arm_1k.jpg",
+   "repeat_mm": 14
+  }
+ },
+ "models": {
+  "sofa": {
+   "gltf": "models/sofa_02/sofa_02_1k.gltf",
+   "size_mm": [
+    90,
+    41,
+    35
+   ]
+  },
+  "coffee_table": {
+   "gltf": "models/modern_coffee_table_01/modern_coffee_table_01_1k.gltf",
+   "size_mm": [
+    60,
+    30,
+    20
+   ]
+  },
+  "armchair": {
+   "gltf": "models/modern_arm_chair_01/modern_arm_chair_01_1k.gltf",
+   "size_mm": [
+    41,
+    49,
+    51
+   ]
+  },
+  "nightstand": {
+   "gltf": "models/painted_wooden_nightstand/painted_wooden_nightstand_1k.gltf",
+   "size_mm": [
+    25,
+    25,
+    31
+   ]
+  },
+  "shelf": {
+   "gltf": "models/wooden_display_shelves_01/wooden_display_shelves_01_1k.gltf",
+   "size_mm": [
+    54,
+    19,
+    78
+   ]
+  },
+  "plant": {
+   "gltf": "models/potted_plant_02/potted_plant_02_1k.gltf",
+   "size_mm": [
+    35,
+    33,
+    42
+   ]
+  }
+ },
+ "source": "Poly Haven",
+ "license": "CC0",
+ "ids": {
+  "floor_wood": "laminate_floor_02",
+  "floor_tile_kitchen": "interior_tiles",
+  "wall_plaster": "white_plaster_02",
+  "wall_exterior": "white_stucco",
+  "paving": "rectangular_paving",
+  "grass": "leafy_grass",
+  "countertop": "marble_01",
+  "fabric_bed": "rough_linen",
+  "sofa": "sofa_02",
+  "coffee_table": "modern_coffee_table_01",
+  "armchair": "modern_arm_chair_01",
+  "nightstand": "painted_wooden_nightstand",
+  "shelf": "wooden_display_shelves_01",
+  "plant": "potted_plant_02"
+ }
+}

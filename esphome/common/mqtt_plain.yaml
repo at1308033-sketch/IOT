@@ -1,0 +1,3 @@
+# MQTT không mã hóa (cổng 1883) — dùng khi test board thật
+mqtt:
+  port: 1883

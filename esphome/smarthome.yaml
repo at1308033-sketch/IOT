@@ -1,0 +1,923 @@
+# =====================================================================
+# Smarthome đồ án — ESP32 DevKit V1 (30 chân) trên board extend
+# Nối HA qua MQTT (tiền tố smarthome-doan, HA tự nhận thiết bị bằng discovery).
+# Mọi kịch bản an toàn (cửa, báo cháy/gas, vắng nhà, đèn hiên, quạt hút) chạy
+# NGAY TRÊN ESP32 → mất Wi-Fi/MQTT/HA vẫn hoạt động. HA chỉ lo thông báo.
+#
+# Phân chân (cố định, KHÔNG đổi):
+#   IO36 ACS712-20A OUT (chia áp 1k/2k → ×2/3)   IO34 Cảm biến cửa (trở kéo lên 1k, đóng = LOW)
+#   IO35 PIR HC-SR501                            IO32 Quang trở AO
+#   RC522: SCK 25 · MOSI 26 · MISO 33 · SDA/CS 27 · RST nối 3V3 · IRQ bỏ trống
+#   IO12 Servo cửa 360° (chân strapping)         IO13 Còi (kích mức THẤP)
+#   IO23/22/21 LED RGB R/G/B (2 đèn chung chân, cathode chung)
+#   IO19 DHT11 (module xanh)   IO18 Lửa DO (LOW = có lửa)   IO39 MQ-2 AO (analog, ADC1)
+#   Relay kích mức thấp: IO5 đèn hiên · IO17 đèn khách · IO16 đèn ngủ · IO4 quạt hút
+#   Trống: IO15 (strapping, để hở) · IO14 · IO2
+# =====================================================================
+
+substitutions:
+  # Thẻ mặc định khi chưa nhận danh sách từ server (dashboard → MariaDB → MQTT retained)
+  card_1: "AA-BB-CC-DD"
+  card_2: "11-22-33-44"
+  # Còi: kêu ở mức THẤP → "true". Nếu thay còi kích mức cao thì đổi thành "false"
+  buzzer_inverted: "true"
+  # Servo cửa là loại QUAY LIÊN TỤC 360° (không giữ góc): % là TỐC ĐỘ, 0% = đứng yên (1500 µs).
+  # Với min/idle/max = 5/7,5/10 %: -40% = 1300 µs (thuận chiều kim đồng hồ), +40% = 1700 µs (ngược chiều).
+  # Đo trên cửa thật 17/10: mở 1700 µs × 700 ms không kẹt; đóng 1300 µs tới cảm biến mất 149–388 ms.
+  door_open_speed: "40%" # mở: ngược chiều kim đồng hồ, quay trong "Thời gian quay mở" (700 ms)
+  door_close_speed: "-40%" # đóng: thuận chiều kim đồng hồ tới khi cảm biến cửa báo đóng
+  door_close_overtravel: "100ms" # cảm biến báo đóng khi cửa còn hở ~15–25° → quay thêm chừng này
+  door_close_timeout: "1500ms" # quay đóng quá thời gian này mà chưa đóng → coi là vướng
+  # ACS712-20A: 100 mV/A; cầu chia 1k/2k → nhân 1,5 để ra điện áp OUT thật
+  acs_mv_per_a: "100"
+  acs_divider: "1.5"
+  # MQ-2 cần sấy nóng: bỏ qua báo gas trong 60 s đầu sau khi cấp điện
+  gas_warmup_ms: "60000"
+  # Bật chế độ vắng nhà xong có 30 s để ra khỏi nhà rồi mới canh gác
+  away_exit_ms: "30000"
+
+esphome:
+  name: smarthome
+  # Tên ngắn → entity_id gọn, tiếng Việt không dấu: switch.smarthome_den_hien, ...
+  friendly_name: "Smarthome"
+  on_boot:
+    priority: -100
+    then:
+      # Cửa đang mở lúc khởi động → quay về đóng; đã đóng thì giữ servo đứng yên
+      - if:
+          condition:
+            binary_sensor.is_on: door_contact
+          then:
+            - script.execute: close_door
+          else:
+            - script.execute: door_stop
+
+esp32:
+  board: esp32doit-devkit-v1
+
+logger:
+
+# Kết nối server qua MQTT — HA tự nhận thiết bị nhờ MQTT discovery
+packages:
+  mqtt_transport: !include common/mqtt_plain.yaml
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  client_id: smarthome-doan
+  # Thiết bị cũ "ESP32 Smart Home Gateway" đã chiếm smarthome/status, smarthome/sensor/…
+  topic_prefix: smarthome-doan
+  discovery: true
+  # Mất broker vẫn KHÔNG khởi động lại — kịch bản cục bộ chạy tiếp
+  reboot_timeout: 0s
+  on_message:
+    # Danh sách UID hợp lệ "AA-BB-CC-DD,11-22-33-44" (Node-RED gửi, retained). "-" = không có thẻ
+    - topic: smarthome/config/cards
+      qos: 1
+      then:
+        - lambda: |-
+            if (x.size() > 250) {
+              ESP_LOGW("cards", "Danh sách thẻ quá dài (%u ký tự), bỏ qua", (unsigned) x.size());
+              return;
+            }
+            std::string list = (x == "-") ? "" : x;
+            if (list == id(allowed_cards)) return;
+            id(allowed_cards) = list;
+            ESP_LOGI("cards", "Cập nhật danh sách thẻ: %s", x.c_str());
+            id(card_count).update();
+  on_json_message:
+    # Mở cửa bằng điện thoại (thẻ NFC / nút trong thông báo): {"action":"open","by":"Izth"}
+    - topic: smarthome/cmd/door
+      qos: 1
+      then:
+        - if:
+            condition:
+              lambda: 'return x["action"] == "open";'
+            then:
+              - script.execute: open_door
+              - script.execute:
+                  id: log_access
+                  uid: !lambda 'std::string by = x["by"] | "Điện thoại"; return by.substr(0, 32);'
+                  result: granted
+                  method: phone
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: Asia/Ho_Chi_Minh
+
+# OTA mã hóa bằng khóa trong secrets.yaml (giữ như bản cũ để nạp OTA đè lên được)
+ota:
+  - platform: esphome
+    encryption:
+      key: !secret smarthome_api_key
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Smarthome Fallback"
+    password: !secret smarthome_ap_password
+  reboot_timeout: 0s
+
+captive_portal:
+
+# Bảng điều khiển ngay trên ESP32 (dự phòng khi HA hỏng): http://smarthome.local
+web_server:
+  port: 80
+  version: 3
+  # Bắt buộc đăng nhập: trang này điều khiển được cửa và có cả trang nạp firmware /update
+  auth:
+    type: digest # không gửi mật khẩu dạng dễ giải mã
+    username: admin
+    password: !secret smarthome_web_password
+
+# ---------------- Biến nội bộ ----------------
+globals:
+  - id: allowed_cards
+    type: std::string
+    restore_value: true
+    max_restore_data_length: 254
+    initial_value: '"${card_1},${card_2}"'
+  - id: acs_zero_v # điện áp OUT lúc 0 A, lưu flash sau khi hiệu chuẩn
+    type: float
+    restore_value: true
+    initial_value: "2.5"
+  - id: wrong_count
+    type: int
+    initial_value: "0"
+  - id: close_tries
+    type: int
+    initial_value: "0"
+  - id: door_stuck
+    type: bool
+    initial_value: "false"
+  - id: alarm_on # đang báo động (cháy/gas/đột nhập)
+    type: bool
+    initial_value: "false"
+  - id: alarm_muted # đã bấm "Tắt báo động": im còi, đèn vẫn nháy tới khi hết lửa/gas
+    type: bool
+    initial_value: "false"
+  - id: gas_active
+    type: bool
+    initial_value: "false"
+  - id: intrusion
+    type: bool
+    initial_value: "false"
+  - id: away_since # mốc millis() lúc bật vắng nhà (tính 30 s ra khỏi nhà)
+    type: uint32_t
+    initial_value: "0"
+  - id: porch_auto # đèn hiên đang bật do cảm biến (bật tay thì không tự tắt)
+    type: bool
+    initial_value: "false"
+  - id: hum_high # độ ẩm đang ở vùng cao (có trễ 5 %)
+    type: bool
+    initial_value: "false"
+
+# ---------------- Ngõ ra PWM ----------------
+output:
+  - platform: ledc
+    id: servo_pwm
+    pin: GPIO12 # strapping: chỉ gắn servo, không thêm trở kéo lên
+    frequency: 50 Hz
+    # Hai kênh LEDC liền nhau (0/1, 2/3, ...) dùng CHUNG một timer. Để tự cấp, servo ở kênh 0
+    # chung timer với pwm_r (1000 Hz) → bị ép về 1000 Hz, servo không quay / quay loạn.
+    # Kênh 4 = timer 2, không ai dùng chung (RGB nằm ở kênh 1, 2, 3).
+    channel: 4
+  - platform: ledc
+    id: pwm_r
+    pin: GPIO23
+  - platform: ledc
+    id: pwm_g
+    pin: GPIO22
+  - platform: ledc
+    id: pwm_b
+    pin: GPIO21
+
+servo:
+  - id: door_servo
+    output: servo_pwm
+    # 50 Hz: 5 % = 1000 µs, 7,5 % = 1500 µs (dừng), 10 % = 2000 µs
+    min_level: 5%
+    idle_level: 7.5%
+    max_level: 10%
+    # Servo 360°: đặt tốc độ ngay, không chuyển tiếp; nhả xung do script door_stop lo
+    transition_length: 0s
+    auto_detach_time: 0s
+
+# 2 đèn RGB (khách + ngủ) chung 3 chân màu → 1 thực thể
+light:
+  - platform: rgb
+    id: rgb_light
+    name: "Đèn RGB"
+    red: pwm_r
+    green: pwm_g
+    blue: pwm_b
+    restore_mode: ALWAYS_OFF
+    effects:
+      - strobe:
+          name: "Nháy đỏ"
+          colors:
+            - state: true
+              brightness: 100%
+              red: 100%
+              green: 0%
+              blue: 0%
+              duration: 300ms
+            - state: false
+              duration: 300ms
+
+# ---------------- Relay & còi ----------------
+switch:
+  - platform: gpio
+    id: buzzer
+    name: "Còi"
+    pin:
+      number: GPIO13
+      inverted: ${buzzer_inverted}
+    restore_mode: ALWAYS_OFF
+  - platform: gpio
+    id: relay_porch
+    name: "Đèn hiên"
+    pin: { number: GPIO5, inverted: true } # IO5 nháy lúc khởi động là bình thường
+    restore_mode: ALWAYS_OFF
+    on_turn_off:
+      - lambda: id(porch_auto) = false;
+      - script.stop: porch_timer
+  - platform: gpio
+    id: relay_living
+    name: "Đèn phòng khách"
+    pin: { number: GPIO17, inverted: true }
+    restore_mode: ALWAYS_OFF
+  - platform: gpio
+    id: relay_bed
+    name: "Đèn phòng ngủ"
+    pin: { number: GPIO16, inverted: true }
+    restore_mode: ALWAYS_OFF
+  - platform: gpio
+    id: relay_fan
+    name: "Quạt hút phòng ngủ"
+    pin: { number: GPIO4, inverted: true }
+    restore_mode: ALWAYS_OFF
+
+  # Bật: đèn hiên theo chuyển động + quạt theo độ ẩm. Tắt: chỉ điều khiển tay (báo gas vẫn bật quạt)
+  - platform: template
+    id: auto_mode
+    name: "Chế độ tự động"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - script.execute: fan_apply
+  - platform: template
+    id: away_mode
+    name: "Chế độ vắng nhà"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: id(away_since) = millis();
+      - script.execute: beep_short
+    on_turn_off:
+      - lambda: id(intrusion) = false;
+
+button:
+  - platform: template
+    name: "Mở cửa"
+    icon: mdi:door-open
+    on_press:
+      - script.execute: open_door
+      - script.execute: { id: log_access, uid: "", result: "granted", method: "remote" }
+  - platform: template
+    name: "Đóng cửa"
+    icon: mdi:door-closed
+    on_press:
+      - script.stop: open_door
+      - script.stop: door_rotate_open
+      - script.execute: close_door
+  - platform: template
+    name: "Tắt báo động"
+    icon: mdi:bell-off
+    on_press:
+      - lambda: |-
+          id(alarm_muted) = true;  // im còi; đèn nháy tới khi hết lửa/gas
+          id(intrusion) = false;   // đột nhập: xóa hẳn
+          id(buzzer).turn_off();
+  # Bấm khi mô hình KHÔNG tải (xem hướng dẫn hiệu chuẩn)
+  - platform: template
+    name: "Hiệu chuẩn ACS712 (0 A)"
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(acs_zero_v) = id(acs_v).state;
+          ESP_LOGI("acs", "Điểm 0 mới: %.3f V", id(acs_zero_v));
+
+# ---------------- Thông số chỉnh trên HA (lưu flash) ----------------
+number:
+  - platform: template
+    id: porch_off_min
+    name: "Đèn hiên tắt sau"
+    unit_of_measurement: "min"
+    min_value: 1
+    max_value: 30
+    step: 1
+    initial_value: 2
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  - platform: template
+    id: dark_threshold
+    name: "Ngưỡng trời tối"
+    unit_of_measurement: "%"
+    min_value: 5
+    max_value: 90
+    step: 1
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  # MQ-2 AO: không khí sạch thường 0,2–1 V, có gas tăng dần. Báo khi ≥ ngưỡng, hết báo khi < ngưỡng − 0,2 V
+  - platform: template
+    id: gas_threshold
+    name: "Ngưỡng báo gas"
+    icon: mdi:gas-cylinder
+    unit_of_measurement: "V"
+    min_value: 0.3
+    max_value: 3.0
+    step: 0.05
+    initial_value: 1.5
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  - platform: template
+    id: hum_on
+    name: "Độ ẩm bật quạt"
+    unit_of_measurement: "%"
+    min_value: 50
+    max_value: 95
+    step: 1
+    initial_value: 75
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  # Thử servo 360°: chọn giá trị → servo quay 2 giây ở tốc độ đó rồi dừng.
+  # 0 = đứng yên (≈ giá trị 90), dương = một chiều, âm = chiều ngược lại.
+  - platform: template
+    id: servo_test
+    name: "Thử servo 2 giây"
+    icon: mdi:rotate-3d-variant
+    unit_of_measurement: "%"
+    min_value: -100
+    max_value: 100
+    step: 5
+    initial_value: 0
+    optimistic: true
+    entity_category: config
+    set_action:
+      - script.stop: open_door
+      - script.stop: close_door
+      - script.stop: door_rotate_open
+      - servo.write:
+          id: door_servo
+          level: !lambda "return x / 100.0f;"
+      - delay: 2s
+      - script.execute: door_stop
+  - platform: template
+    id: door_open_ms
+    name: "Thời gian quay mở"
+    icon: mdi:rotate-left
+    unit_of_measurement: "ms"
+    min_value: 50
+    max_value: 3000
+    step: 10
+    initial_value: 700 # đo 17/10: 700 ms không kẹt. Giá trị cũ lưu trong flash vẫn được giữ!
+    optimistic: true
+    restore_value: true
+    entity_category: config
+  - platform: template
+    id: door_open_s
+    name: "Thời gian mở cửa" # mở xong chờ chừng này rồi tự đóng (bấm "Đóng cửa" để đóng sớm)
+    unit_of_measurement: "s"
+    min_value: 3
+    max_value: 600
+    step: 1
+    initial_value: 10 # giá trị cũ (300) lưu trong flash vẫn được giữ → đặt lại trên HA
+    optimistic: true
+    restore_value: true
+    entity_category: config
+
+# ---------------- RFID RC522 ----------------
+spi:
+  clk_pin: GPIO25
+  mosi_pin: GPIO26
+  miso_pin: GPIO33
+
+rc522_spi:
+  cs_pin: GPIO27
+  # Test 17/10: VersionReg 0x82 (chip clone), SPI ổn định tới 8 MHz → chạy 4 MHz cho dư biên
+  data_rate: 4MHz
+  # RST nối thẳng 3V3 → không khai báo reset_pin
+  update_interval: 1s
+  on_tag:
+    then:
+      - lambda: |-
+          id(last_tag).publish_state(x);
+          std::string list = "," + id(allowed_cards) + ",";
+          bool ok = !x.empty() && list.find("," + x + ",") != std::string::npos;
+          if (ok) {
+            id(wrong_count) = 0;
+            id(open_door).execute();
+            id(log_access).execute(x, "granted", "rfid");
+          } else if (++id(wrong_count) >= 3) {   // sai 3 lần liên tiếp → còi 5 s
+            id(wrong_count) = 0;
+            id(beep_lockout).execute();
+            id(log_access).execute(x, "lockout", "rfid");
+          } else {
+            id(beep_long).execute();
+            id(log_access).execute(x, "denied", "rfid");
+          }
+
+text_sensor:
+  - platform: template
+    id: last_tag
+    name: "Thẻ vừa quẹt"
+    icon: mdi:card-account-details-outline
+
+# Cửa dạng cover cho HA (cover.open_cover / cover.close_cover). Trạng thái lấy từ cảm biến cửa.
+# Mở qua open_door → vẫn tự đóng sau "Thời gian mở cửa", vẫn ghi lịch sử như nút "Mở cửa".
+cover:
+  - platform: template
+    id: door
+    name: "Cua"
+    device_class: door
+    lambda: |-
+      return id(door_contact).state ? COVER_OPEN : COVER_CLOSED;
+    open_action:
+      - script.execute: open_door
+      - script.execute: { id: log_access, uid: "", result: "granted", method: "remote" }
+    close_action:
+      - script.stop: open_door
+      - script.stop: door_rotate_open
+      - script.execute: close_door
+    stop_action:
+      - script.stop: open_door
+      - script.stop: close_door
+      - script.stop: door_rotate_open
+      - script.execute: door_stop
+
+# ---------------- Cảm biến số ----------------
+binary_sensor:
+  - platform: status
+    name: "Kết nối"
+
+  # Đóng (có nam châm) = LOW → off; mở = HIGH → on. IO34 không có pull-up nội, dùng trở 1k ngoài
+  # Test 17/10: đóng = 142 mV, mở = 3139 mV → ĐẠT
+  - platform: gpio
+    id: door_contact
+    name: "Cửa chính"
+    device_class: door
+    pin:
+      number: GPIO34
+      mode:
+        input: true
+      inverted: false
+    filters:
+      - delayed_on_off: 20ms
+    on_state:
+      - script.execute:
+          id: log_event
+          type: door
+          kind: main
+          state: !lambda 'return x ? "open" : "closed";'
+    on_press:
+      - if:
+          condition:
+            lambda: 'return id(away_mode).state && millis() - id(away_since) > ${away_exit_ms};'
+          then:
+            - lambda: id(intrusion) = true;
+
+  # PIR HC-SR501 ĐẠT (18/10) sau khi cấp VCC bằng dây 5 V riêng (dây chung với relay/servo làm kẹt ON).
+  # Jumper H (kích lặp lại): còn cử động là giữ mức cao, hết cử động ~3–5 s (Tx nhỏ nhất) mới xuống.
+  # IO35 chỉ đọc, không có pull nội → không pullup.
+  - platform: gpio
+    id: motion
+    name: "Chuyển động trước nhà"
+    device_class: motion
+    pin:
+      number: GPIO35
+      mode:
+        input: true
+      inverted: false
+    filters:
+      - delayed_on: 200ms
+      - delayed_off: 10s # hết cử động: module ~3–5 s + 10 s này mới báo "off"
+    on_press:
+      - if:
+          condition:
+            lambda: 'return id(away_mode).state && millis() - id(away_since) > ${away_exit_ms};'
+          then:
+            - lambda: id(intrusion) = true;
+      - if:
+          condition:
+            and:
+              - switch.is_on: auto_mode
+              - binary_sensor.is_on: is_dark
+              - switch.is_off: relay_porch
+          then:
+            - switch.turn_on: relay_porch
+            - lambda: id(porch_auto) = true;
+      - script.stop: porch_timer
+    on_release:
+      - if:
+          condition:
+            lambda: return id(porch_auto);
+          then:
+            - script.execute: porch_timer
+
+  - platform: gpio
+    id: fire
+    name: "Báo cháy bếp"
+    device_class: smoke
+    pin: { number: GPIO18, inverted: true } # LOW = có lửa
+    filters:
+      - delayed_on: 300ms
+      - delayed_off: 3s
+    on_state:
+      - script.execute:
+          id: log_event
+          type: alarm
+          kind: fire
+          state: !lambda 'return x ? "on" : "off";'
+
+  # Báo gas theo điện áp AO của MQ-2 (sensor gas_ao) so với "Ngưỡng báo gas", có trễ 0,2 V
+  - platform: template
+    id: gas
+    name: "Báo khí gas bếp"
+    device_class: gas
+    lambda: |-
+      float v = id(gas_ao).state;
+      if (isnan(v)) return {};
+      float t = id(gas_threshold).state;
+      if (v >= t) return true;
+      if (v < t - 0.2f) return false;
+      return id(gas).state;
+    filters:
+      - delayed_on: 1s
+      - delayed_off: 5s
+    on_state:
+      - script.execute:
+          id: log_event
+          type: alarm
+          kind: gas
+          state: !lambda 'return x ? "on" : "off";'
+
+  - platform: template
+    id: intrusion_sensor
+    name: "Báo động đột nhập"
+    device_class: safety
+    lambda: return id(intrusion);
+    on_state:
+      - script.execute:
+          id: log_event
+          type: alarm
+          kind: intrusion
+          state: !lambda 'return x ? "on" : "off";'
+
+  - platform: template
+    name: "Cửa bị vướng"
+    device_class: problem
+    lambda: return id(door_stuck);
+
+  # Thẻ đã đọc được khi test 17/10 (MIFARE Classic 1K). Chỉ báo có/không thẻ, KHÔNG mở cửa —
+  # quyền mở cửa vẫn theo danh sách allowed_cards ở rc522_spi → on_tag
+  - platform: rc522
+    uid: 12-34-56-78
+    name: "The 1"
+
+  # Trời tối khi ánh sáng < ngưỡng, sáng lại khi > ngưỡng + 10 % (chống chập chờn)
+  - platform: template
+    id: is_dark
+    name: "Trời tối"
+    icon: mdi:weather-night
+    lambda: |-
+      float l = id(light_pct).state;
+      if (isnan(l)) return {};
+      float t = id(dark_threshold).state;
+      if (l < t) return true;
+      if (l > t + 10.0f) return false;
+      return id(is_dark).state;
+    filters:
+      - delayed_on_off: 3s
+    # Trời vừa tối mà vẫn đang có chuyển động (PIR giữ mức cao) → bật đèn hiên luôn
+    on_press:
+      - if:
+          condition:
+            and:
+              - switch.is_on: auto_mode
+              - binary_sensor.is_on: motion
+              - switch.is_off: relay_porch
+          then:
+            - switch.turn_on: relay_porch
+            - lambda: id(porch_auto) = true;
+
+# ---------------- Cảm biến tương tự (ADC1, 12 dB ≈ 0–3,1 V) ----------------
+sensor:
+  - platform: dht
+    model: DHT11
+    pin: GPIO19
+    update_interval: 10s
+    temperature:
+      name: "Nhiệt độ phòng ngủ"
+    humidity:
+      id: bed_hum
+      name: "Độ ẩm phòng ngủ"
+      on_value:
+        - lambda: |-
+            float on = id(hum_on).state;
+            bool high = id(hum_high);
+            if (x >= on) high = true;
+            else if (x <= on - 5.0f) high = false;
+            if (high != id(hum_high)) {
+              id(hum_high) = high;
+              id(fan_apply).execute();   // chỉ tác động khi vượt ngưỡng → vẫn bật/tắt tay được
+            }
+
+  # Module quang trở: trời càng tối điện áp AO càng cao → % ánh sáng = 100 − V/3,3 × 100
+  - platform: adc
+    id: light_pct
+    name: "Cảm biến ánh sáng"
+    pin: GPIO32
+    attenuation: 12db
+    update_interval: 2s
+    unit_of_measurement: "%"
+    device_class: "" # bỏ loại "điện áp" mặc định của ADC, nếu không HA từ chối đơn vị %
+    state_class: measurement
+    icon: mdi:brightness-5
+    accuracy_decimals: 0
+    filters:
+      - lambda: 'float p = 100.0f - x / 3.3f * 100.0f; return p < 0 ? 0.0f : (p > 100 ? 100.0f : p);'
+      - sliding_window_moving_average: { window_size: 5, send_every: 1 }
+
+  # MQ-2 AO nối thẳng IO39 (ADC1 — ADC2 như IO15 không đọc được khi Wi-Fi chạy).
+  # Module nuôi 5V: AO có thể > 3,3 V khi gas rất đậm; ADC 12 dB bão hòa ở ~3,1 V (vẫn báo gas)
+  - platform: adc
+    id: gas_ao
+    name: "Mức khí gas"
+    pin: GPIO39
+    attenuation: 12db
+    samples: 16
+    update_interval: 1s
+    accuracy_decimals: 2
+    icon: mdi:molecule
+    filters:
+      - sliding_window_moving_average: { window_size: 3, send_every: 1 }
+
+  # Điện áp OUT thật của ACS712 (đã bù cầu chia) — xem khi hiệu chuẩn
+  - platform: adc
+    id: acs_v
+    name: "Điện áp ACS712"
+    pin: GPIO36
+    attenuation: 12db
+    samples: 64
+    update_interval: 1s
+    accuracy_decimals: 3
+    entity_category: diagnostic
+    filters:
+      - multiply: ${acs_divider}
+
+  - platform: template
+    id: total_current
+    name: "Dòng tổng 5V"
+    unit_of_measurement: "A"
+    device_class: current
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 1s
+    lambda: |-
+      if (isnan(id(acs_v).state)) return {};
+      // Trị tuyệt đối: lắp ngược chiều IP+/IP− vẫn ra số dương. Dưới 0,1 A coi là nhiễu (bản 20A)
+      float a = fabsf(id(acs_v).state - id(acs_zero_v)) * 1000.0f / ${acs_mv_per_a};
+      return a < 0.10f ? 0.0f : a;
+    filters:
+      - sliding_window_moving_average: { window_size: 5, send_every: 1 }
+
+  - platform: template
+    name: "Công suất tiêu thụ"
+    unit_of_measurement: "W"
+    device_class: power
+    state_class: measurement
+    accuracy_decimals: 2
+    update_interval: 1s
+    lambda: return id(total_current).state * 5.0f; # ước tính ở 5 V
+
+  - platform: template
+    id: card_count
+    name: "Số thẻ hợp lệ"
+    icon: mdi:card-account-details
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 60s
+    lambda: |-
+      const std::string &s = id(allowed_cards);
+      if (s.empty()) return 0;
+      return (float) (std::count(s.begin(), s.end(), ',') + 1);
+
+  - platform: wifi_signal
+    name: "Wi-Fi"
+    update_interval: 60s
+    entity_category: diagnostic
+
+# ---------------- Bộ não báo động: chạy 2 lần/giây ----------------
+interval:
+  - interval: 500ms
+    then:
+      - lambda: |-
+          bool gas_now = id(gas).state && millis() > ${gas_warmup_ms};
+          // Gas: bật quạt hút ngay; hết gas → quạt trả về theo độ ẩm
+          if (gas_now != id(gas_active)) {
+            id(gas_active) = gas_now;
+            if (gas_now) id(relay_fan).turn_on();
+            else id(fan_apply).execute();
+          }
+          bool on = id(fire).state || gas_now || id(intrusion);
+          if (on != id(alarm_on)) {
+            id(alarm_on) = on;
+            auto call = on ? id(rgb_light).turn_on() : id(rgb_light).turn_off();
+            if (on) call.set_effect("Nháy đỏ");
+            call.perform();
+            if (!on) { id(alarm_muted) = false; id(buzzer).turn_off(); }
+          }
+          // Giữ còi kêu liên tục khi báo động (kể cả khi bíp thẻ vừa tắt còi)
+          if (on && !id(alarm_muted) && !id(buzzer).state) id(buzzer).turn_on();
+
+# ---------------- Kịch bản ----------------
+script:
+  # Dừng servo 360°: tốc độ 0 rồi nhả xung (không xung = đứng yên, không rung)
+  - id: door_stop
+    mode: restart
+    then:
+      - servo.write: { id: door_servo, level: 0% }
+      - delay: 100ms
+      - servo.detach: door_servo
+
+  # Quay mở một góc = quay ngược chiều kim đồng hồ trong "Thời gian quay mở" (đo: 700 ms)
+  - id: door_rotate_open
+    mode: single
+    then:
+      - servo.write: { id: door_servo, level: "${door_open_speed}" }
+      - delay: !lambda "return (uint32_t) id(door_open_ms).state;"
+      - script.execute: door_stop
+      - script.wait: door_stop
+
+  - id: open_door
+    mode: restart
+    then:
+      - script.stop: close_door
+      - switch.turn_off: away_mode # mở cửa hợp lệ = người nhà về → tắt vắng nhà
+      - lambda: id(door_stuck) = false;
+      - script.execute: beep_short
+      # Chỉ quay khi cửa đang đóng — servo 360° quay thêm khi đã mở sẽ vặn quá đà
+      - if:
+          condition:
+            binary_sensor.is_off: door_contact
+          then:
+            - script.execute: door_rotate_open
+            - script.wait: door_rotate_open
+      - delay: !lambda "return (uint32_t) (id(door_open_s).state * 1000);"
+      - script.execute: close_door
+
+  # Đóng: quay thuận chiều kim đồng hồ tới khi cảm biến cửa báo đóng, quay thêm
+  # ${door_close_overtravel} cho khít rồi dừng. Quá ${door_close_timeout} chưa đóng (vướng)
+  # → quay mở lại, thử tối đa 3 lần
+  - id: close_door
+    mode: single
+    then:
+      - lambda: id(close_tries) = 0;
+      - while:
+          condition:
+            lambda: return id(close_tries) < 3;
+          then:
+            - if:
+                condition:
+                  binary_sensor.is_off: door_contact
+                then:
+                  - lambda: |-
+                      id(close_tries) = 99;  // đã đóng
+                      id(door_stuck) = false;
+                else:
+                  - servo.write: { id: door_servo, level: "${door_close_speed}" }
+                  - wait_until:
+                      condition:
+                        binary_sensor.is_off: door_contact
+                      timeout: ${door_close_timeout}
+                  - if:
+                      condition:
+                        binary_sensor.is_off: door_contact
+                      then:
+                        - delay: ${door_close_overtravel}
+                      else:
+                        - logger.log:
+                            level: ERROR
+                            format: "Cua: quay ${door_close_timeout} ma cam bien chua bao DONG"
+                  - script.execute: door_stop
+                  - script.wait: door_stop
+                  - if:
+                      condition:
+                        binary_sensor.is_on: door_contact
+                      then:
+                        - lambda: id(close_tries) += 1;
+                        - script.execute: door_rotate_open
+                        - script.wait: door_rotate_open
+                        - script.execute: beep_long
+                        - delay: 3s
+      - script.execute: door_stop
+      - if:
+          condition:
+            lambda: return id(close_tries) != 99;
+          then:
+            - lambda: id(door_stuck) = true; # để cửa mở, báo lên HA
+            - script.execute: { id: log_event, type: alarm, kind: door_stuck, state: "on" }
+
+  - id: porch_timer
+    mode: restart
+    then:
+      - delay: !lambda "return (uint32_t) (id(porch_off_min).state * 60000);"
+      - switch.turn_off: relay_porch
+
+  # Quạt hút theo độ ẩm (chỉ khi bật tự động và không có gas)
+  - id: fan_apply
+    then:
+      - lambda: |-
+          if (!id(auto_mode).state || id(gas_active)) return;
+          if (id(hum_high)) id(relay_fan).turn_on();
+          else id(relay_fan).turn_off();
+
+  # Các tiếng bíp không chen vào khi đang báo động
+  - id: beep_short
+    mode: restart
+    then:
+      - if:
+          condition: { lambda: "return !id(alarm_on);" }
+          then:
+            - switch.turn_on: buzzer
+            - delay: 120ms
+            - switch.turn_off: buzzer
+  - id: beep_long
+    mode: restart
+    then:
+      - if:
+          condition: { lambda: "return !id(alarm_on);" }
+          then:
+            - switch.turn_on: buzzer
+            - delay: 1500ms
+            - switch.turn_off: buzzer
+  - id: beep_lockout
+    mode: single
+    then:
+      - repeat:
+          count: 15
+          then:
+            - if:
+                condition: { lambda: "return !id(alarm_on);" }
+                then:
+                  - switch.turn_on: buzzer
+                  - delay: 150ms
+                  - switch.turn_off: buzzer
+                  - delay: 150ms
+
+  # Gửi sự kiện lên server → Node-RED ghi MariaDB, HA gửi thông báo
+  - id: log_access
+    mode: queued
+    max_runs: 10
+    parameters:
+      uid: string
+      result: string # granted | denied | lockout
+      method: string # rfid | remote | phone
+    then:
+      - mqtt.publish_json:
+          topic: smarthome/event/access
+          qos: 1
+          payload: |-
+            root["type"] = "access";
+            root["uid"] = uid;
+            root["result"] = result;
+            root["method"] = method;
+            auto t = id(sntp_time).now();
+            if (t.is_valid()) root["ts"] = t.strftime("%Y-%m-%dT%H:%M:%S%z");
+
+  - id: log_event
+    mode: queued
+    max_runs: 10
+    parameters:
+      type: string # door | alarm
+      kind: string # main | fire | gas | intrusion | door_stuck
+      state: string # open/closed | on/off
+    then:
+      - mqtt.publish_json:
+          topic: !lambda 'return "smarthome/event/" + type;'
+          qos: 1
+          payload: |-
+            root["type"] = type;
+            root["kind"] = kind;
+            root["state"] = state;
+            auto t = id(sntp_time).now();
+            if (t.is_valid()) root["ts"] = t.strftime("%Y-%m-%dT%H:%M:%S%z");

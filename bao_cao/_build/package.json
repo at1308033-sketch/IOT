@@ -1,0 +1,9 @@
+{
+  "name": "smarthome-bao-cao",
+  "private": true,
+  "description": "Tạo slide báo cáo đồ án Smarthome (không thuộc mã ứng dụng)",
+  "dependencies": {
+    "@mdi/js": "^7.4.47",
+    "pptxgenjs": "^3.12.0"
+  }
+}

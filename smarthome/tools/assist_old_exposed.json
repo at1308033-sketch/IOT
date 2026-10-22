@@ -1,0 +1,22 @@
+[
+ "binary_sensor.esp32_smart_home_gateway_cong_tac_cua",
+ "binary_sensor.esp32_smart_home_gateway_chuyen_dong_pk",
+ "binary_sensor.esp32_smart_home_gateway_chuyen_dong_ct",
+ "switch.esp32_smart_home_gateway_den_pk",
+ "switch.esp32_smart_home_gateway_den_bep",
+ "switch.esp32_smart_home_gateway_den_ct",
+ "switch.esp32_smart_home_gateway_den_pn",
+ "switch.esp32_smart_home_gateway_den_san",
+ "switch.esp32_gateway_02_den_phong_khach",
+ "switch.esp32_gateway_02_den_phong_ngu",
+ "switch.esp32_gateway_02_loa_canh_bao",
+ "switch.esp32_gateway_02_rfid_enable",
+ "fan.esp32_smarthome_quat",
+ "switch.esp32_smarthome_loa",
+ "switch.esp32_smarthome_dau_doc_rfid",
+ "switch.esp32_gateway_02_quat_dc_5v",
+ "light.esp32_gateway_02_den_led",
+ "binary_sensor.esp32_gateway_02_chuyen_dong_phong_khach",
+ "binary_sensor.esp32_gateway_02_trang_thai_cua_vat_ly",
+ "light.esp32_gateway_02_den_phong_ngu"
+]
