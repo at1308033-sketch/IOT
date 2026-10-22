@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Harness thẻ 3D</title>
+<style>html,body{margin:0;background:#fff}</style>
+</head>
+<body>
+<script>
+// Trạng thái kiểm thử dùng chung cho các test
+window.calls = [];      // [domain, service, data] của callService
+window.moreInfo = [];   // entityId từ sự kiện hass-more-info
+document.addEventListener('hass-more-info', (e) => window.moreInfo.push(e.detail.entityId));
+// lỗi khi dựng (module ném lỗi) -> test dừng sớm thay vì chờ hết giờ
+window.addEventListener('error', (e) => { window.sceneError = String(e.message || e.error); });
+window.addEventListener('unhandledrejection', (e) => { window.sceneError = String(e.reason); });
+// hass giả: chỉ có states, callService và language
+window.fakeHass = (states) => ({
+  states,
+  callService(d, s, data) { window.calls.push([d, s, data]); return Promise.resolve(); },
+  language: 'vi',
+});
+// Trạng thái đầy đủ, thực tế cho mọi entity của model3d.json + STATUS (đèn tắt, cửa đóng, có kết nối)
+window.fullStates = () => {
+  const s = (state, attributes = {}) => ({ state, attributes });
+  const off = () => s('off');
+  return {
+    'cover.smarthome_cua': s('closed', { device_class: 'door' }),
+    'switch.smarthome_coi': off(),
+    'binary_sensor.smarthome_chuyen_dong_truoc_nha': off(),
+    'switch.smarthome_den_phong_khach': off(),
+    'light.smarthome_den_rgb': s('off', { supported_color_modes: ['rgb'] }),
+    'switch.smarthome_den_hien': off(),
+    'sensor.smarthome_the_vua_quet': s('12-34-56-78'),
+    'binary_sensor.smarthome_troi_toi': off(),
+    'binary_sensor.smarthome_bao_khi_gas_bep': off(),
+    'sensor.smarthome_muc_khi_gas': s('12', { unit_of_measurement: '%' }),
+    'binary_sensor.smarthome_bao_chay_bep': off(),
+    'switch.smarthome_quat_hut_phong_ngu': off(),
+    'sensor.smarthome_dht11': s('ok'),
+    'sensor.smarthome_nhiet_do_phong_ngu': s('28.5', { unit_of_measurement: '°C' }),
+    'sensor.smarthome_do_am_phong_ngu': s('65', { unit_of_measurement: '%' }),
+    'switch.smarthome_den_phong_ngu': off(),
+    'binary_sensor.smarthome_ket_noi': s('on'),
+    'sensor.smarthome_cong_suat_tieu_thu': s('3.2', { unit_of_measurement: 'W' }),
+    'binary_sensor.smarthome_bao_dong_dot_nhap': off(),
+    'button.smarthome_tat_bao_dong': s('unknown'),
+  };
+};
+</script>
+<script type="module">
+const params = new URLSearchParams(location.search);
+window.params = params;
+
+// ?scene=1: dựng nhà + 14 thiết bị với trạng thái mẫu, camera cố định, render một khung.
+// Tùy chọn xem thử: &theme=day|night, &on=gas,flame,... (bật thêm), &na=slug,... (unavailable),
+// &t=giây (chạy hoạt ảnh thêm trước khi chụp), &cam=overview|living|bed|kitchen|back|left|top,
+// &w=&h= cỡ khung (mặc định 900×600), &nodev=1 (bỏ thiết bị)
+if (params.get('scene')) {
+  const base = '/www/smarthome/3d/';
+  const THREE = await import(base + 'vendor/three.module.min.js');
+  const { CSS2DRenderer } = await import(base + 'vendor/CSS2DRenderer.js');
+  const S = await import(base + 'scene.js');
+  const L = await import(base + 'logic.js');
+  const { loadAssets } = await import(base + 'assets.js');
+  const model = await (await fetch(base + 'model3d.json')).json();
+  const assets = await loadAssets();
+  const theme = params.get('theme') || 'day';
+  const W = Number(params.get('w') || 900), H = Number(params.get('h') || 600);
+  const box = document.createElement('div');
+  box.id = 'scene';
+  box.style.cssText = `position:relative;width:${W}px;height:${H}px;overflow:hidden`;
+  document.body.appendChild(box);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  S.setupRenderer(renderer, { mobile: !!params.get('mobile') });
+  renderer.setPixelRatio(1);
+  renderer.setSize(W, H);
+  box.appendChild(renderer.domElement);
+  const css = new CSS2DRenderer();
+  css.setSize(W, H);
+  css.domElement.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none';
+  box.appendChild(css.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(38, W / H, 10, 8000);
+  // góc nhìn xem thử: [vị trí, điểm nhìn]
+  const CAMS = {
+    overview: [[250, 700, -340], [250, 0, 178]],
+    living: [[330, 330, -150], [340, 0, 110]],
+    bed: [[300, 300, 60], [400, 0, 280]],
+    kitchen: [[140, 290, 40], [110, 0, 290]],
+    back: [[250, 700, 700], [250, 0, 178]],
+    left: [[-420, 640, 178], [250, 0, 178]],
+    top: [[250, 1000, 238], [250, 0, 178]],
+    door: [[80, 92, 150], [75, 58, 0]],          // cận cảnh cửa chính (từ trong nhà)
+    fan: [[300, 150, 300], [224, 108, 268]],     // cận cảnh quạt hút phòng ngủ
+  };
+  const [cp, ct] = CAMS[params.get('cam') || 'overview'];
+  camera.position.set(...cp);
+  camera.lookAt(...ct);
+  const house = S.buildHouse(model, assets);
+  scene.add(house);
+
+  // trạng thái mẫu: đèn on, RGB đỏ (&rgb=r,g,b), quạt on, cửa mở, còn lại off; &off=slug,... tắt hẳn
+  const list = (k) => new Set((params.get(k) || '').split(',').filter(Boolean));
+  const on = list('on'), na = list('na'), off = list('off');
+  const rgb = (params.get('rgb') || '255,0,0').split(',').map(Number);
+  const states = {};
+  for (const [slug, dev] of Object.entries(model.devices)) {
+    const k = L.KINDS[slug].kind;
+    let st = { state: 'off', attributes: {} };
+    if (k === 'lamp' || slug === 'fan' || on.has(slug)) st = { state: 'on', attributes: {} };
+    if (slug === 'rgb') st = { state: 'on', attributes: { rgb_color: rgb, brightness: 255 } };
+    if (slug === 'door') st = { state: 'open', attributes: {} };
+    if (off.has(slug)) st = { state: slug === 'door' ? 'closed' : 'off', attributes: {} };
+    if (slug === 'rfid') st = { state: 'A1-B2-C3-D4', attributes: {} };
+    if (slug === 'ldr') st = { state: theme === 'night' ? 'on' : 'off', attributes: {} };
+    if (slug === 'gaslvl') st = { state: '12', attributes: { unit_of_measurement: '%' } };
+    states[dev.entity] = st;
+  }
+  states['sensor.smarthome_nhiet_do_phong_ngu'] = { state: '28.5', attributes: { unit_of_measurement: '°C' } };
+  states['sensor.smarthome_do_am_phong_ngu'] = { state: '65', attributes: { unit_of_measurement: '%' } };
+  const devs = {};
+  for (const [slug, dev] of Object.entries(model.devices)) {
+    if (params.get('nodev')) break;
+    const info = L.KINDS[slug];
+    const d = S.createDevice(slug, info, dev, model);
+    scene.add(d.object);
+    const ids = info.entities || [dev.entity];
+    const sts = ids.map((id) => (na.has(slug) ? { state: 'unavailable', attributes: {} } : states[id]));
+    d.update(L.visualState(info.kind, sts));
+    if (slug === 'rfid' && on.has('rfid')) d.update(L.visualState('rfid', [{ state: 'FF-00-11-22' }]));
+    devs[slug] = d;
+  }
+  S.applyTheme(scene, theme);
+  // tường tự hạ theo camera (root = scene để thiết bị gắn tường ẩn theo): chạy tới khi đứng yên
+  for (let i = 0; i < 200 && S.updateCutaway(scene, camera, 0.05); i++);
+  const extra = Number(params.get('t') || 0);
+  for (const d of Object.values(devs)) d.tick(0);
+  for (let s = 0; s < extra; s += 0.05) for (const d of Object.values(devs)) d.tick(0.05);
+  if (on.has('gas') || on.has('flame')) S.alarmGlow(scene, model.rooms, true, 0.2 + extra, 'kitchen');
+  // &ao=1: xem thử như máy tính (EffectComposer + GTAO + OutputPass), Task 5 làm thật trong thẻ
+  if (params.get('ao')) {
+    const { EffectComposer } = await import(base + 'vendor/EffectComposer.js');
+    const { RenderPass } = await import(base + 'vendor/RenderPass.js');
+    const { GTAOPass } = await import(base + 'vendor/GTAOPass.js');
+    const { OutputPass } = await import(base + 'vendor/OutputPass.js');
+    const comp = new EffectComposer(renderer);
+    comp.addPass(new RenderPass(scene, camera));
+    const ao = new GTAOPass(scene, camera, W, H);
+    ao.updateGtaoMaterial({ radius: 12, distanceExponent: 1.5, thickness: 6, scale: 1.2, samples: 16 });
+    ao.blendIntensity = 1;
+    comp.addPass(ao);
+    comp.addPass(new OutputPass());
+    comp.render();
+  } else renderer.render(scene, camera);
+  css.render(scene, camera);
+  // vẽ lại một khung (không AO) sau khi test đổi trạng thái
+  window.redraw = () => { scene.updateMatrixWorld(); renderer.render(scene, camera); css.render(scene, camera); };
+  let walls = 0;
+  scene.traverse((o) => { if (o.userData.wall) walls++; });
+  Object.assign(window, { scene, camera, renderer, devs, S, house, model, assets, THREE });
+  window.sceneInfo = { walls, slugs: Object.keys(devs), calls: renderer.info.render.calls,
+    failed: assets.failed };
+  window.sceneReady = true;
+} else {
+  // Mặc định: thẻ thật, cỡ theo ?w=&h= (900×600), &demo=1; test tự gán card.hass
+  await import('/www/smarthome/smarthome-3d-card.js?v=test');
+  const card = document.createElement('smarthome-3d-card');
+  card.setConfig({ demo: params.get('demo') === '1' });
+  card.style.cssText = `width:${params.get('w') || 900}px;height:${params.get('h') || 600}px`;
+  document.body.appendChild(card);
+  window.card = card;
+  if (window.onCard) window.onCard(card);   // móc cho test (add_init_script): chạy ngay khi tạo thẻ
+}
+</script>
+</body>
+</html>

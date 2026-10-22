@@ -1,0 +1,501 @@
+# =====================================================================
+# Smarthome đồ án — package Home Assistant
+#   • Cảm biến SQL đọc MariaDB (database smarthome, user chỉ đọc ha_ro)
+#   • Quản lý thẻ RFID: HA → MQTT smarthome/cmd/cards → Node-RED → bảng cards
+#   • Điện năng (Wh) tích phân từ công suất ESP32
+# Thiết bị ESP32 (MQTT discovery) có tiền tố entity: *.smarthome_*
+# =====================================================================
+
+# ---------------- Đọc MariaDB ----------------
+sql:
+  - name: "Smarthome DB lượt truy cập hôm nay"
+    unique_id: smarthome_db_access_today
+    db_url: !secret smarthome_db_url
+    query: "SELECT COUNT(*) AS n FROM access_log WHERE ts_server >= CURDATE();"
+    column: n
+    unit_of_measurement: "lượt"
+    state_class: measurement
+    icon: mdi:door-open
+
+  - name: "Smarthome DB sai thẻ hôm nay"
+    unique_id: smarthome_db_denied_today
+    db_url: !secret smarthome_db_url
+    query: "SELECT COUNT(*) AS n FROM access_log WHERE ts_server >= CURDATE() AND result <> 'granted';"
+    column: n
+    unit_of_measurement: "lượt"
+    state_class: measurement
+    icon: mdi:card-remove
+
+  - name: "Smarthome DB lượt truy cập 7 ngày"
+    unique_id: smarthome_db_access_7d
+    db_url: !secret smarthome_db_url
+    query: "SELECT COUNT(*) AS n FROM access_log WHERE ts_server >= CURDATE() - INTERVAL 6 DAY;"
+    column: n
+    unit_of_measurement: "lượt"
+    icon: mdi:calendar-week
+
+  # State = thời điểm lượt gần nhất; thuộc tính items = 20 lượt gần nhất (JSON)
+  - name: "Smarthome DB lịch sử truy cập"
+    unique_id: smarthome_db_access_recent
+    db_url: !secret smarthome_db_url
+    query: >-
+      SELECT COALESCE(DATE_FORMAT(MAX(ts), '%H:%i:%s %d/%m/%Y'), 'Chưa có') AS last_ts,
+             COALESCE(JSON_ARRAYAGG(JSON_OBJECT(
+               't', DATE_FORMAT(ts, '%d/%m %H:%i:%s'), 'who', who, 'uid', uid,
+               'r', result, 'rv', result_vi, 'm', method) ORDER BY id DESC), '[]') AS items
+      FROM (SELECT * FROM v_access_log ORDER BY id DESC LIMIT 20) t;
+    column: last_ts
+    icon: mdi:history
+
+  # State = số thẻ; thuộc tính cards = toàn bộ thẻ (JSON)
+  - name: "Smarthome DB danh sách thẻ"
+    unique_id: smarthome_db_cards
+    db_url: !secret smarthome_db_url
+    query: >-
+      SELECT COUNT(*) AS n,
+             COALESCE(JSON_ARRAYAGG(JSON_OBJECT(
+               'uid', uid, 'name', holder_name, 'active', active,
+               'created', DATE_FORMAT(created_at, '%d/%m/%Y')) ORDER BY id), '[]') AS cards
+      FROM cards;
+    column: n
+    unit_of_measurement: "thẻ"
+    icon: mdi:card-account-details
+
+  # 10 sự kiện cửa / báo cháy gần nhất
+  - name: "Smarthome DB sự kiện"
+    unique_id: smarthome_db_events_recent
+    db_url: !secret smarthome_db_url
+    query: >-
+      SELECT COUNT(*) AS n,
+             COALESCE(JSON_ARRAYAGG(JSON_OBJECT(
+               't', DATE_FORMAT(COALESCE(ts_device, ts_server), '%d/%m %H:%i:%s'),
+               'type', type, 'kind', kind, 'state', state) ORDER BY id DESC), '[]') AS items
+      FROM (SELECT * FROM events ORDER BY id DESC LIMIT 10) t;
+    column: n
+    icon: mdi:bell-ring
+
+# ---------------- Điện năng ----------------
+sensor:
+  - platform: integration
+    name: "Smarthome điện năng"
+    unique_id: smarthome_energy_total
+    source: sensor.smarthome_cong_suat_tieu_thu
+    method: left
+    round: 2
+    max_sub_interval:
+      minutes: 1
+
+# ---------------- Ô hiển thị gộp cho mặt bằng ----------------
+# Mỗi thiết bị một ô: ACS712 (dòng + công suất), DHT11 (nhiệt độ + độ ẩm)
+template:
+  - sensor:
+      - name: "Smarthome ACS712"
+        unique_id: smarthome_acs712_display
+        icon: mdi:current-dc
+        availability: >-
+          {{ has_value('sensor.smarthome_dong_tong_5v') and has_value('sensor.smarthome_cong_suat_tieu_thu') }}
+        state: >-
+          {{ '%.2f' | format(states('sensor.smarthome_dong_tong_5v') | float) }} A ·
+          {{ '%.1f' | format(states('sensor.smarthome_cong_suat_tieu_thu') | float) }} W
+      - name: "Smarthome DHT11"
+        unique_id: smarthome_dht11_display
+        icon: mdi:thermometer-water
+        availability: >-
+          {{ has_value('sensor.smarthome_nhiet_do_phong_ngu') and has_value('sensor.smarthome_do_am_phong_ngu') }}
+        state: >-
+          {{ '%.1f' | format(states('sensor.smarthome_nhiet_do_phong_ngu') | float) }} °C ·
+          {{ states('sensor.smarthome_do_am_phong_ngu') | float | round(0) | int }} %
+
+utility_meter:
+  smarthome_dien_nang_hom_nay:
+    name: "Smarthome điện năng hôm nay"
+    unique_id: smarthome_energy_daily
+    source: sensor.smarthome_dien_nang
+    cycle: daily
+
+# ---------------- Ô nhập liệu cho trang Quản lý thẻ ----------------
+input_text:
+  smarthome_card_uid:
+    name: "Smarthome · UID thẻ"
+    max: 32
+    pattern: "^$|^[0-9A-Fa-f]{2}([-:][0-9A-Fa-f]{2}){3,9}$"
+    icon: mdi:card-bulleted
+  smarthome_card_name:
+    name: "Smarthome · Tên chủ thẻ"
+    max: 100
+    icon: mdi:account
+
+input_select:
+  smarthome_card_pick:
+    name: "Smarthome · Chọn thẻ"
+    options:
+      - "(chưa có thẻ)"
+    icon: mdi:card-search
+
+# ---------------- Script ----------------
+script:
+  smarthome_doan_lenh_the:
+    alias: "Smarthome · Lệnh quản lý thẻ"
+    icon: mdi:card-account-details
+    mode: queued
+    fields:
+      lenh:
+        name: Lệnh
+        required: true
+        selector:
+          select:
+            options:
+              - { label: "Thêm / bật lại", value: add }
+              - { label: "Khóa", value: disable }
+              - { label: "Bật lại", value: enable }
+              - { label: "Xóa", value: delete }
+      uid:
+        name: UID
+        required: true
+        example: "AA-BB-CC-DD"
+        selector: { text: }
+      ten:
+        name: Tên chủ thẻ
+        selector: { text: }
+    sequence:
+      - variables:
+          u: "{{ (uid | default('') | string) | trim | upper | replace(':', '-') | replace(' ', '-') }}"
+      - if:
+          - condition: template
+            value_template: "{{ not (u | regex_match('^[0-9A-F]{2}(-[0-9A-F]{2}){3,9}$')) }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              title: "Smarthome · UID không hợp lệ"
+              message: "\"{{ u }}\" không đúng dạng AA-BB-CC-DD."
+          - stop: "UID không hợp lệ"
+      - action: mqtt.publish
+        data:
+          topic: smarthome/cmd/cards
+          qos: 1
+          payload: "{{ {'action': lenh, 'uid': u, 'name': ten | default('') | string | trim} | to_json }}"
+
+  # Mở cửa bằng điện thoại không cần NFC: gắn script này vào ô Cài đặt nhanh / widget của app Android.
+  # Lịch sử ghi "Điện thoại Izth" (giống chạm NFC).
+  smarthome_doan_mo_cua_dien_thoai:
+    alias: "Smarthome · Mở cửa (điện thoại)"
+    icon: mdi:cellphone-key
+    mode: single
+    sequence:
+      - action: mqtt.publish
+        data:
+          topic: smarthome/cmd/door
+          qos: 1
+          retain: false
+          payload: >-
+            {{ {'action': 'open', 'by': device_attr('6101b2e2781e45d49da95652b4393b60', 'name') or 'Izth'} | to_json }}
+
+  # Mô phỏng chạm điện thoại Izth vào thẻ NFC "Cửa chính" (khi chưa có sticker NFC)
+  smarthome_doan_mo_phong_nfc:
+    alias: "Mô phỏng · Chạm điện thoại vào thẻ NFC"
+    icon: mdi:nfc-tap
+    mode: single
+    sequence:
+      - event: tag_scanned
+        event_data:
+          tag_id: smarthome-cua-chinh
+          device_id: 6101b2e2781e45d49da95652b4393b60
+
+  smarthome_doan_lay_the_vua_quet:
+    alias: "Smarthome · Lấy UID thẻ vừa quẹt"
+    icon: mdi:card-search
+    sequence:
+      - if:
+          - condition: template
+            value_template: "{{ states('sensor.smarthome_the_vua_quet') in ['unknown', 'unavailable', ''] }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: smarthome_card_uid
+              title: "Smarthome · Chưa có thẻ nào được quẹt"
+              message: "Quẹt thẻ vào RC522 trước (còi bíp dài), rồi bấm lại \"Lấy UID thẻ vừa quẹt\"."
+          - stop: "Chưa quẹt thẻ"
+      - action: input_text.set_value
+        target: { entity_id: input_text.smarthome_card_uid }
+        data:
+          value: "{{ states('sensor.smarthome_the_vua_quet') }}"
+
+  smarthome_doan_them_the:
+    alias: "Smarthome · Thêm thẻ từ ô nhập"
+    icon: mdi:card-plus
+    sequence:
+      - action: script.smarthome_doan_lenh_the
+        data:
+          lenh: add
+          uid: "{{ states('input_text.smarthome_card_uid') }}"
+          ten: "{{ states('input_text.smarthome_card_name') }}"
+      - action: input_text.set_value
+        target: { entity_id: [input_text.smarthome_card_uid, input_text.smarthome_card_name] }
+        data: { value: "" }
+
+  smarthome_doan_the_da_chon:
+    alias: "Smarthome · Lệnh cho thẻ đang chọn"
+    icon: mdi:card-account-details-outline
+    fields:
+      lenh:
+        name: Lệnh
+        required: true
+        selector:
+          select:
+            options: [enable, disable, delete]
+    sequence:
+      - variables:
+          u: "{{ states('input_select.smarthome_card_pick').split(' · ')[0] }}"
+      - condition: template
+        value_template: "{{ u | regex_match('^[0-9A-F]{2}(-[0-9A-F]{2}){3,9}$') }}"
+      - action: script.smarthome_doan_lenh_the
+        data:
+          lenh: "{{ lenh }}"
+          uid: "{{ u }}"
+
+# ---------------- Automation ----------------
+automation:
+  # Có sự kiện mới → đọc lại MariaDB ngay (không chờ chu kỳ 30 s)
+  - id: smarthome_doan_refresh_sql
+    alias: "Smarthome · Cập nhật dữ liệu MariaDB khi có sự kiện"
+    mode: restart
+    triggers:
+      - trigger: mqtt
+        topic: smarthome/event/#
+      - trigger: mqtt
+        topic: smarthome/config/cards
+    actions:
+      - delay: { seconds: 1 }
+      - action: homeassistant.update_entity
+        target:
+          entity_id:
+            - sensor.smarthome_db_luot_truy_cap_hom_nay
+            - sensor.smarthome_db_sai_the_hom_nay
+            - sensor.smarthome_db_luot_truy_cap_7_ngay
+            - sensor.smarthome_db_lich_su_truy_cap
+            - sensor.smarthome_db_danh_sach_the
+            - sensor.smarthome_db_su_kien
+
+  # Đồng bộ danh sách thẻ trong DB vào ô chọn của trang Quản lý
+  - id: smarthome_doan_sync_card_pick
+    alias: "Smarthome · Đồng bộ ô chọn thẻ"
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id: sensor.smarthome_db_danh_sach_the
+      - trigger: homeassistant
+        event: start
+    actions:
+      - variables:
+          cards: >-
+            {% set c = state_attr('sensor.smarthome_db_danh_sach_the', 'cards') %}
+            {{ (c | from_json) if c is string else (c or []) }}
+          opts: >-
+            {% set ns = namespace(o=[]) %}
+            {% for c in cards %}
+              {% set ns.o = ns.o + [c.uid ~ ' · ' ~ (c.name if c.name else 'chưa đặt tên') ~ ('' if c.active else ' (đã khóa)')] %}
+            {% endfor %}
+            {{ ns.o if ns.o else ['(chưa có thẻ)'] }}
+      - action: input_select.set_options
+        target: { entity_id: input_select.smarthome_card_pick }
+        data:
+          options: "{{ opts }}"
+
+  # ================= Báo động =================
+  # Còi, đèn nháy đỏ, quạt hút đều do ESP32 tự làm (chạy cả khi mất HA).
+  # HA chỉ gửi thông báo + nút "Tắt báo động" ngay trong thông báo.
+  - id: smarthome_doan_alarm_notify
+    alias: "Smarthome · Thông báo báo động (cháy, gas, đột nhập)"
+    mode: queued
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.smarthome_bao_chay_bep
+        to: "on"
+        id: fire
+      - trigger: state
+        entity_id: binary_sensor.smarthome_bao_khi_gas_bep
+        to: "on"
+        id: gas
+      - trigger: state
+        entity_id: binary_sensor.smarthome_bao_dong_dot_nhap
+        to: "on"
+        id: intrusion
+    actions:
+      - variables:
+          title: >-
+            {{ {'fire': '🔥 Phát hiện LỬA ở bếp',
+                'gas': '💨 Rò KHÍ GAS ở bếp',
+                'intrusion': '🚨 Đột nhập khi vắng nhà'}[trigger.id] }}
+          message: >-
+            {% if trigger.id == 'gas' %}Còi đang kêu, quạt hút đã bật.
+            {% elif trigger.id == 'fire' %}Còi đang kêu, đèn RGB nháy đỏ.
+            {% else %}{{ 'Cửa chính vừa mở' if is_state('binary_sensor.smarthome_cua_chinh', 'on') else 'Có chuyển động trước nhà' }}.
+            {% endif %} Lúc {{ now().strftime('%H:%M:%S %d/%m') }}.
+      - action: persistent_notification.create
+        data:
+          notification_id: "smarthome_{{ trigger.id }}"
+          title: "Smarthome · {{ title }}"
+          message: "{{ message }}"
+      - action: notify.mobile_app_izth
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+          data:
+            tag: "smarthome-{{ trigger.id }}"
+            priority: high
+            ttl: 0
+            channel: alarm_stream # Android: kêu cả khi điện thoại để im lặng
+            actions:
+              - action: SMARTHOME_TAT_BAO_DONG
+                title: "Tắt báo động"
+
+  - id: smarthome_doan_alarm_mute
+    alias: "Smarthome · Tắt báo động từ thông báo"
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: { action: SMARTHOME_TAT_BAO_DONG }
+    actions:
+      - action: button.press
+        target: { entity_id: button.smarthome_tat_bao_dong }
+
+  # Assist: "tắt còi" phải bấm nút Tắt báo động — nếu chỉ tắt công tắc còi thì khi đang báo động
+  # ESP32 bật lại còi sau 0,5 s. Câu lệnh ở đây được ưu tiên hơn câu có sẵn của Assist.
+  - id: smarthome_doan_assist_tat_bao_dong
+    alias: "Smarthome · Assist tắt báo động / tắt còi"
+    mode: single
+    triggers:
+      - trigger: conversation
+        command:
+          - "tắt báo động"
+          - "tắt còi [báo động]"
+          - "tắt còi báo"
+          - "im còi"
+          - "dừng báo động"
+    actions:
+      - action: button.press
+        target: { entity_id: button.smarthome_tat_bao_dong }
+      - set_conversation_response: >-
+          {{ 'Đã tắt còi. Đèn vẫn nháy đỏ tới khi hết lửa hoặc gas.'
+             if is_state('binary_sensor.smarthome_bao_chay_bep', 'on') or is_state('binary_sensor.smarthome_bao_khi_gas_bep', 'on')
+             else 'Đã tắt còi báo động.' }}
+
+  - id: smarthome_doan_door_stuck
+    alias: "Smarthome · Cửa bị vướng không đóng được"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.smarthome_cua_bi_vuong
+        to: "on"
+    actions:
+      - action: notify.mobile_app_izth
+        data:
+          title: "🚪 Cửa chính bị vướng"
+          message: "Đã thử đóng 3 lần không được, cửa đang để mở."
+          data: { tag: smarthome-door }
+
+  - id: smarthome_doan_offline
+    alias: "Smarthome · ESP32 mất kết nối"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.smarthome_ket_noi
+        to: "off"
+        for: { minutes: 2 }
+    actions:
+      - action: notify.mobile_app_izth
+        data:
+          title: "⚠️ Smarthome offline"
+          message: "ESP32 mất kết nối hơn 2 phút. Báo cháy/gas trên mạch vẫn chạy, nhưng không gửi được thông báo."
+          data: { tag: smarthome-offline }
+
+  # ---------------- Điện thoại ----------------
+  # Cách 1: chạm điện thoại (app Home Assistant) vào thẻ NFC "Cửa chính" dán cạnh cửa → mở cửa.
+  # Chỉ điện thoại trong danh sách `allowed` được mở; lịch sử ghi "Điện thoại <tên máy>".
+  - id: smarthome_doan_nfc_open
+    alias: "Smarthome · Mở cửa bằng thẻ NFC (điện thoại)"
+    mode: single
+    max_exceeded: silent
+    variables:
+      allowed:
+        - 6101b2e2781e45d49da95652b4393b60 # Izth (vivo V2352A)
+    triggers:
+      - trigger: tag
+        tag_id: smarthome-cua-chinh
+    actions:
+      - variables:
+          phone_id: "{{ trigger.event.data.device_id | default('') }}"
+          phone: "{{ device_attr(phone_id, 'name') or 'Điện thoại' }}"
+      - choose:
+          - conditions: "{{ phone_id not in allowed }}"
+            sequence:
+              - action: persistent_notification.create
+                data:
+                  title: "Smarthome · Điện thoại lạ chạm thẻ NFC"
+                  message: "{{ phone }} ({{ phone_id }}) không có quyền mở cửa — lúc {{ now().strftime('%H:%M:%S %d/%m') }}."
+          - conditions: "{{ not is_state('binary_sensor.smarthome_ket_noi', 'on') }}"
+            sequence:
+              - action: notify.mobile_app_izth
+                data:
+                  title: "Smarthome · Không mở được cửa"
+                  message: "ESP32 đang offline."
+                  data: { tag: smarthome-door }
+        default:
+          - action: mqtt.publish
+            data:
+              topic: smarthome/cmd/door
+              qos: 1
+              retain: false
+              payload: "{{ {'action': 'open', 'by': phone} | to_json }}"
+          - action: notify.mobile_app_izth
+            data:
+              title: "🚪 Smarthome"
+              message: "Đã mở cửa chính bằng NFC."
+              data: { tag: smarthome-door, timeout: 30 }
+      - delay: { seconds: 5 } # chống chạm 2 lần liên tiếp
+
+  # Cách 2: có người quẹt sai thẻ → thông báo lên điện thoại với nút "Mở cửa" / "Bỏ qua"
+  - id: smarthome_doan_wrong_card_notify
+    alias: "Smarthome · Báo sai thẻ lên điện thoại"
+    mode: queued
+    triggers:
+      - trigger: mqtt
+        topic: smarthome/event/access
+    conditions:
+      - "{{ trigger.payload_json is defined and trigger.payload_json.result in ['denied', 'lockout'] }}"
+    actions:
+      - variables:
+          lockout: "{{ trigger.payload_json.result == 'lockout' }}"
+          uid: "{{ trigger.payload_json.uid | default('?') }}"
+      - action: notify.mobile_app_izth
+        data:
+          title: "{{ '🚨 Sai thẻ 3 lần — còi đang kêu' if lockout else '❌ Có người quẹt sai thẻ' }}"
+          message: "Thẻ {{ uid }} lúc {{ now().strftime('%H:%M:%S') }}. Mở cửa cho người này?"
+          data:
+            tag: smarthome-door # thông báo mới thay thông báo cũ
+            timeout: 120 # quá 2 phút thì thông báo tự biến mất
+            priority: high
+            ttl: 0
+            actions:
+              - action: SMARTHOME_MO_CUA
+                title: "Mở cửa"
+              - action: SMARTHOME_BO_QUA
+                title: "Bỏ qua"
+
+  - id: smarthome_doan_notify_open
+    alias: "Smarthome · Mở cửa từ nút trong thông báo"
+    mode: single
+    triggers:
+      - trigger: event
+        event_type: mobile_app_notification_action
+        event_data: { action: SMARTHOME_MO_CUA }
+    actions:
+      - action: mqtt.publish
+        data:
+          topic: smarthome/cmd/door
+          qos: 1
+          retain: false
+          payload: >-
+            {{ {'action': 'open', 'by': device_attr('6101b2e2781e45d49da95652b4393b60', 'name') or 'Izth'} | to_json }}
+      - action: notify.mobile_app_izth
+        data:
+          message: clear_notification
+          data: { tag: smarthome-door }

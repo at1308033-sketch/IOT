@@ -1,0 +1,8 @@
+# View "Mô hình 3D" cho dashboard smarthome-doan — thẻ three.js đọc /local/smarthome/3d/model3d.json.
+# build_dashboard.py tự chèn trang này ngay sau trang Điều khiển (đừng sửa dashboard.yaml bằng tay).
+title: Mô hình 3D
+path: mo-hinh-3d
+icon: mdi:cube-outline
+type: panel
+cards:
+  - type: custom:smarthome-3d-card

@@ -1,0 +1,593 @@
+[
+  {
+    "id": "sh_tab",
+    "type": "tab",
+    "label": "Smarthome đồ án",
+    "disabled": false,
+    "info": "ESP32 → MQTT → MariaDB (database smarthome).\nQuản lý thẻ: HA → smarthome/cmd/cards → bảng cards → smarthome/config/cards (retained) → ESP32."
+  },
+  {
+    "id": "sh_mqtt_broker",
+    "type": "mqtt-broker",
+    "name": "Mosquitto (nội bộ)",
+    "broker": "core-mosquitto",
+    "port": "1883",
+    "clientid": "nodered-smarthome",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "closeTopic": "",
+    "willTopic": "",
+    "userProps": "",
+    "sessionExpiry": ""
+  },
+  {
+    "id": "sh_mysql",
+    "type": "MySQLdatabase",
+    "name": "MariaDB smarthome",
+    "host": "core-mariadb",
+    "port": "3306",
+    "db": "smarthome",
+    "tz": "+07:00",
+    "charset": "UTF8MB4"
+  },
+  {
+    "id": "c1",
+    "type": "comment",
+    "z": "sh_tab",
+    "name": "① Lịch sử truy cập → access_log",
+    "info": "",
+    "x": 170,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "in_access",
+    "type": "mqtt in",
+    "z": "sh_tab",
+    "name": "smarthome/event/access",
+    "topic": "smarthome/event/access",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "sh_mqtt_broker",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 170,
+    "y": 80,
+    "wires": [
+      [
+        "fn_access"
+      ]
+    ]
+  },
+  {
+    "id": "fn_access",
+    "type": "function",
+    "z": "sh_tab",
+    "name": "Chuẩn bị INSERT access_log",
+    "func": "// Giờ Việt Nam (UTC+7, không có giờ mùa hè) dạng 'YYYY-MM-DD HH:MM:SS'\nfunction vn(d) { return new Date(d.getTime() + 7 * 3600e3).toISOString().slice(0, 19).replace('T', ' '); }\n// ts của ESP32: '2026-10-05T09:30:12+0700' → giờ VN; sai định dạng / chưa đồng bộ giờ → null\nfunction deviceTs(ts) {\n    if (typeof ts !== 'string') return null;\n    const m = ts.match(/^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}:\\d{2})([+-]\\d{2})(\\d{2})$/);\n    if (!m) return null;\n    const d = new Date(`${m[1]}T${m[2]}${m[3]}:${m[4]}`);\n    if (isNaN(d) || d.getUTCFullYear() < 2024) return null;\n    return vn(d);\n}\n\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) { node.warn('Payload không phải JSON'); return null; }\nconst result = ['granted', 'denied', 'lockout'].includes(p.result) ? p.result : null;\nconst method = ['rfid', 'remote', 'phone'].includes(p.method) ? p.method : null;\nif (!result || !method) { node.warn(['Sự kiện truy cập không hợp lệ', p]); return null; }\n// UID thẻ viết hoa; với điện thoại uid là tên máy → giữ nguyên\nconst uid = (method === 'phone' ? String(p.uid || '') : String(p.uid || '').toUpperCase()).slice(0, 32);\nmsg.topic = `INSERT INTO access_log (ts_device, ts_server, uid, card_id, holder_name, result, method)\n             SELECT ?, ?, ?, c.id, c.holder_name, ?, ?\n             FROM (SELECT 1) AS x LEFT JOIN cards c ON c.uid = ?`;\nmsg.payload = [deviceTs(p.ts), vn(new Date()), uid, result, method, uid];\nnode.status({ fill: result === 'granted' ? 'green' : 'red', shape: 'dot', text: `${uid || 'từ xa'} · ${result}` });\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 80,
+    "wires": [
+      [
+        "db_access"
+      ]
+    ]
+  },
+  {
+    "id": "db_access",
+    "type": "mysql",
+    "z": "sh_tab",
+    "mydb": "sh_mysql",
+    "name": "Ghi access_log",
+    "x": 680,
+    "y": 80,
+    "wires": [
+      [
+        "dbg_err"
+      ]
+    ]
+  },
+  {
+    "id": "c2",
+    "type": "comment",
+    "z": "sh_tab",
+    "name": "② Cửa / báo cháy → events",
+    "info": "",
+    "x": 150,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "in_door",
+    "type": "mqtt in",
+    "z": "sh_tab",
+    "name": "smarthome/event/door",
+    "topic": "smarthome/event/door",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "sh_mqtt_broker",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 180,
+    "wires": [
+      [
+        "fn_event"
+      ]
+    ]
+  },
+  {
+    "id": "in_alarm",
+    "type": "mqtt in",
+    "z": "sh_tab",
+    "name": "smarthome/event/alarm",
+    "topic": "smarthome/event/alarm",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "sh_mqtt_broker",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 220,
+    "wires": [
+      [
+        "fn_event"
+      ]
+    ]
+  },
+  {
+    "id": "fn_event",
+    "type": "function",
+    "z": "sh_tab",
+    "name": "Chuẩn bị INSERT events",
+    "func": "// Giờ Việt Nam (UTC+7, không có giờ mùa hè) dạng 'YYYY-MM-DD HH:MM:SS'\nfunction vn(d) { return new Date(d.getTime() + 7 * 3600e3).toISOString().slice(0, 19).replace('T', ' '); }\n// ts của ESP32: '2026-10-05T09:30:12+0700' → giờ VN; sai định dạng / chưa đồng bộ giờ → null\nfunction deviceTs(ts) {\n    if (typeof ts !== 'string') return null;\n    const m = ts.match(/^(\\d{4}-\\d{2}-\\d{2})T(\\d{2}:\\d{2}:\\d{2})([+-]\\d{2})(\\d{2})$/);\n    if (!m) return null;\n    const d = new Date(`${m[1]}T${m[2]}${m[3]}:${m[4]}`);\n    if (isNaN(d) || d.getUTCFullYear() < 2024) return null;\n    return vn(d);\n}\n\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) { node.warn('Payload không phải JSON'); return null; }\nconst type = String(p.type || '').slice(0, 20);\nconst kind = String(p.kind || '').slice(0, 20);\nconst state = String(p.state || '').slice(0, 20);\nif (!['door', 'alarm'].includes(type) || !kind || !state) { node.warn(['Sự kiện không hợp lệ', p]); return null; }\nmsg.topic = 'INSERT INTO events (ts_device, ts_server, type, kind, state) VALUES (?, ?, ?, ?, ?)';\nmsg.payload = [deviceTs(p.ts), vn(new Date()), type, kind, state];\nnode.status({ fill: 'blue', shape: 'dot', text: `${type}/${kind}: ${state}` });\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 200,
+    "wires": [
+      [
+        "db_event"
+      ]
+    ]
+  },
+  {
+    "id": "db_event",
+    "type": "mysql",
+    "z": "sh_tab",
+    "mydb": "sh_mysql",
+    "name": "Ghi events",
+    "x": 670,
+    "y": 200,
+    "wires": [
+      [
+        "dbg_err"
+      ]
+    ]
+  },
+  {
+    "id": "c3",
+    "type": "comment",
+    "z": "sh_tab",
+    "name": "③ Quản lý thẻ → cards → gửi danh sách cho ESP32",
+    "info": "",
+    "x": 230,
+    "y": 280,
+    "wires": []
+  },
+  {
+    "id": "in_cmd",
+    "type": "mqtt in",
+    "z": "sh_tab",
+    "name": "smarthome/cmd/cards",
+    "topic": "smarthome/cmd/cards",
+    "qos": "1",
+    "datatype": "json",
+    "broker": "sh_mqtt_broker",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 320,
+    "wires": [
+      [
+        "fn_cmd"
+      ]
+    ]
+  },
+  {
+    "id": "fn_cmd",
+    "type": "function",
+    "z": "sh_tab",
+    "name": "Lệnh thẻ → SQL",
+    "func": "// Lệnh từ HA: {\"action\":\"add|enable|disable|delete\",\"uid\":\"AA-BB-CC-DD\",\"name\":\"Nguyễn Văn A\"}\nconst p = msg.payload;\nif (typeof p !== 'object' || p === null) { node.warn('Payload không phải JSON'); return null; }\nconst uid = String(p.uid || '').trim().toUpperCase();\nif (!/^[0-9A-F]{2}(-[0-9A-F]{2}){3,9}$/.test(uid)) { node.warn(`UID không hợp lệ: \"${uid}\"`); return null; }\nconst name = String(p.name || '').trim().slice(0, 100);\nswitch (p.action) {\n    case 'add':\n        msg.topic = `INSERT INTO cards (uid, holder_name, active) VALUES (?, ?, 1)\n                     ON DUPLICATE KEY UPDATE active = 1,\n                       holder_name = IF(VALUES(holder_name) = '', holder_name, VALUES(holder_name))`;\n        msg.payload = [uid, name];\n        break;\n    case 'enable':\n    case 'disable':\n        msg.topic = 'UPDATE cards SET active = ? WHERE uid = ?';\n        msg.payload = [p.action === 'enable' ? 1 : 0, uid];\n        break;\n    case 'delete':\n        msg.topic = 'DELETE FROM cards WHERE uid = ?';\n        msg.payload = [uid];\n        break;\n    default:\n        node.warn(`Lệnh không hỗ trợ: ${p.action}`);\n        return null;\n}\nnode.status({ fill: 'green', shape: 'dot', text: `${p.action} ${uid}` });\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 320,
+    "wires": [
+      [
+        "db_cmd"
+      ]
+    ]
+  },
+  {
+    "id": "db_cmd",
+    "type": "mysql",
+    "z": "sh_tab",
+    "mydb": "sh_mysql",
+    "name": "Cập nhật cards",
+    "x": 610,
+    "y": 320,
+    "wires": [
+      [
+        "fn_list_q"
+      ]
+    ]
+  },
+  {
+    "id": "inj_start",
+    "type": "inject",
+    "z": "sh_tab",
+    "name": "Khi khởi động + mỗi giờ",
+    "props": [],
+    "repeat": "3600",
+    "crontab": "",
+    "once": true,
+    "onceDelay": "5",
+    "topic": "",
+    "x": 190,
+    "y": 380,
+    "wires": [
+      [
+        "fn_list_q"
+      ]
+    ]
+  },
+  {
+    "id": "fn_list_q",
+    "type": "function",
+    "z": "sh_tab",
+    "name": "Truy vấn thẻ hợp lệ",
+    "func": "msg.topic = \"SELECT COALESCE(GROUP_CONCAT(uid ORDER BY id SEPARATOR ','), '') AS list, COUNT(*) AS n FROM cards WHERE active = 1\";\nmsg.payload = [];\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 830,
+    "y": 340,
+    "wires": [
+      [
+        "db_list"
+      ]
+    ]
+  },
+  {
+    "id": "db_list",
+    "type": "mysql",
+    "z": "sh_tab",
+    "mydb": "sh_mysql",
+    "name": "Đọc cards",
+    "x": 1030,
+    "y": 340,
+    "wires": [
+      [
+        "fn_list_pub"
+      ]
+    ]
+  },
+  {
+    "id": "fn_list_pub",
+    "type": "function",
+    "z": "sh_tab",
+    "name": "Danh sách UID",
+    "func": "const row = (msg.payload && msg.payload[0]) || { list: '', n: 0 };\nif (row.list.length > 250) {\n    node.error(`Danh sách thẻ dài ${row.list.length} ký tự (> 250) — ESP32 sẽ bỏ qua. Hãy xóa bớt thẻ.`);\n}\nmsg.topic = 'smarthome/config/cards';\n// Không gửi chuỗi rỗng: retained rỗng = XÓA tin giữ lại, ESP32 sẽ giữ danh sách cũ. \"-\" = không có thẻ nào\nmsg.payload = row.list || '-';\nmsg.retain = true;\nmsg.qos = 1;\nnode.status({ fill: 'green', shape: 'dot', text: `${row.n} thẻ hợp lệ` });\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1210,
+    "y": 340,
+    "wires": [
+      [
+        "out_cards"
+      ]
+    ]
+  },
+  {
+    "id": "out_cards",
+    "type": "mqtt out",
+    "z": "sh_tab",
+    "name": "smarthome/config/cards (retained)",
+    "topic": "",
+    "qos": "",
+    "retain": "",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "sh_mqtt_broker",
+    "x": 1460,
+    "y": 340,
+    "wires": []
+  },
+  {
+    "id": "catch_all",
+    "type": "catch",
+    "z": "sh_tab",
+    "name": "Lỗi SQL / MQTT",
+    "scope": null,
+    "uncaught": false,
+    "x": 150,
+    "y": 460,
+    "wires": [
+      [
+        "dbg_err"
+      ]
+    ]
+  },
+  {
+    "id": "dbg_err",
+    "type": "debug",
+    "z": "sh_tab",
+    "name": "Nhật ký",
+    "active": true,
+    "tosidebar": true,
+    "console": true,
+    "tostatus": false,
+    "complete": "true",
+    "targetType": "full",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 920,
+    "y": 460,
+    "wires": []
+  },
+  {
+    "id": "sim_tab",
+    "type": "tab",
+    "label": "Mô phỏng ESP32",
+    "disabled": false,
+    "info": "ESP32 ảo thay mạch thật khi chưa có phần cứng. Tắt bằng switch.mo_phong_bat trước khi cắm ESP32 thật (hai bên dùng chung topic smarthome-doan/...)."
+  },
+  {
+    "id": "sim_in_0",
+    "type": "mqtt in",
+    "z": "sim_tab",
+    "name": "smarthome-doan/+/+/command",
+    "topic": "smarthome-doan/+/+/command",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "sh_mqtt_broker",
+    "nl": true,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 190,
+    "y": 60,
+    "wires": [
+      [
+        "sim_core"
+      ]
+    ]
+  },
+  {
+    "id": "sim_in_1",
+    "type": "mqtt in",
+    "z": "sim_tab",
+    "name": "smarthome-sim/+/+/command",
+    "topic": "smarthome-sim/+/+/command",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "sh_mqtt_broker",
+    "nl": true,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 190,
+    "y": 110,
+    "wires": [
+      [
+        "sim_core"
+      ]
+    ]
+  },
+  {
+    "id": "sim_in_2",
+    "type": "mqtt in",
+    "z": "sim_tab",
+    "name": "smarthome-sim/+/+/state",
+    "topic": "smarthome-sim/+/+/state",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "sh_mqtt_broker",
+    "nl": true,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 190,
+    "y": 160,
+    "wires": [
+      [
+        "sim_core"
+      ]
+    ]
+  },
+  {
+    "id": "sim_in_3",
+    "type": "mqtt in",
+    "z": "sim_tab",
+    "name": "smarthome/config/cards",
+    "topic": "smarthome/config/cards",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "sh_mqtt_broker",
+    "nl": true,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 190,
+    "y": 210,
+    "wires": [
+      [
+        "sim_core"
+      ]
+    ]
+  },
+  {
+    "id": "sim_in_4",
+    "type": "mqtt in",
+    "z": "sim_tab",
+    "name": "smarthome/cmd/door",
+    "topic": "smarthome/cmd/door",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "sh_mqtt_broker",
+    "nl": true,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 190,
+    "y": 260,
+    "wires": [
+      [
+        "sim_core"
+      ]
+    ]
+  },
+  {
+    "id": "sim_in_5",
+    "type": "mqtt in",
+    "z": "sim_tab",
+    "name": "homeassistant/status",
+    "topic": "homeassistant/status",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "sh_mqtt_broker",
+    "nl": true,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 190,
+    "y": 310,
+    "wires": [
+      [
+        "sim_core"
+      ]
+    ]
+  },
+  {
+    "id": "sim_init",
+    "type": "inject",
+    "z": "sim_tab",
+    "name": "Khởi động (3 s)",
+    "props": [
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "topic": "init",
+    "repeat": "",
+    "once": true,
+    "onceDelay": "3",
+    "x": 180,
+    "y": 380,
+    "wires": [
+      [
+        "sim_core"
+      ]
+    ]
+  },
+  {
+    "id": "sim_tick",
+    "type": "inject",
+    "z": "sim_tab",
+    "name": "Cảm biến mỗi 10 s",
+    "props": [
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "topic": "tick",
+    "repeat": "10",
+    "once": false,
+    "x": 190,
+    "y": 430,
+    "wires": [
+      [
+        "sim_core"
+      ]
+    ]
+  },
+  {
+    "id": "sim_core",
+    "type": "function",
+    "z": "sim_tab",
+    "name": "ESP32 ảo",
+    "func": "const P = 'smarthome-doan', S = 'smarthome-sim';\nconst ENT = {\"status\": {\"comp\": \"binary_sensor\", \"obj\": \"k_t_n_i\", \"name\": \"Kết nối\", \"extra\": {\"dev_cla\": \"connectivity\", \"ent_cat\": \"diagnostic\"}}, \"door\": {\"comp\": \"binary_sensor\", \"obj\": \"c_a_ch_nh\", \"name\": \"Cửa chính\", \"extra\": {\"dev_cla\": \"door\"}}, \"motion\": {\"comp\": \"binary_sensor\", \"obj\": \"chuy_n___ng_ph_ng_kh_ch\", \"name\": \"Chuyển động phòng khách\", \"extra\": {\"dev_cla\": \"motion\"}}, \"fire\": {\"comp\": \"binary_sensor\", \"obj\": \"b_o_ch_y_b_p\", \"name\": \"Báo cháy bếp\", \"extra\": {\"dev_cla\": \"smoke\"}}, \"gas\": {\"comp\": \"binary_sensor\", \"obj\": \"b_o_kh__gas_b_p\", \"name\": \"Báo khí gas bếp\", \"extra\": {\"dev_cla\": \"gas\"}}, \"dark\": {\"comp\": \"binary_sensor\", \"obj\": \"tr_i_t_i\", \"name\": \"Trời tối\", \"extra\": {}}, \"buzzer\": {\"comp\": \"switch\", \"obj\": \"c_i\", \"name\": \"Còi\", \"extra\": {}}, \"strip\": {\"comp\": \"switch\", \"obj\": \"led_d_y_ph_ng_kh_ch\", \"name\": \"LED dây phòng khách\", \"extra\": {}}, \"fan\": {\"comp\": \"switch\", \"obj\": \"qu_t_ph_ng_ng_\", \"name\": \"Quạt phòng ngủ\", \"extra\": {}}, \"kitchen\": {\"comp\": \"switch\", \"obj\": \"__n_b_p\", \"name\": \"Đèn bếp\", \"extra\": {}}, \"porch\": {\"comp\": \"switch\", \"obj\": \"__n_hi_n\", \"name\": \"Đèn hiên\", \"extra\": {}}, \"bedroom\": {\"comp\": \"switch\", \"obj\": \"__n_ph_ng_ng_\", \"name\": \"Đèn phòng ngủ\", \"extra\": {}}, \"auto\": {\"comp\": \"switch\", \"obj\": \"ch_____t____ng\", \"name\": \"Chế độ tự động\", \"extra\": {}}, \"open\": {\"comp\": \"button\", \"obj\": \"m__c_a\", \"name\": \"Mở cửa\", \"extra\": {}}, \"close\": {\"comp\": \"button\", \"obj\": \"__ng_c_a_ngay\", \"name\": \"Đóng cửa ngay\", \"extra\": {}}, \"calib\": {\"comp\": \"button\", \"obj\": \"hi_u_chu_n_acs712__0_a_\", \"name\": \"Hiệu chuẩn ACS712 (0 A)\", \"extra\": {\"ent_cat\": \"config\"}}, \"tag\": {\"comp\": \"sensor\", \"obj\": \"th__v_a_qu_t\", \"name\": \"Thẻ vừa quẹt\", \"extra\": {}}, \"temp\": {\"comp\": \"sensor\", \"obj\": \"nhi_t____ph_ng_ng_\", \"name\": \"Nhiệt độ phòng ngủ\", \"extra\": {\"unit_of_meas\": \"°C\", \"dev_cla\": \"temperature\", \"stat_cla\": \"measurement\"}}, \"hum\": {\"comp\": \"sensor\", \"obj\": \"____m_ph_ng_ng_\", \"name\": \"Độ ẩm phòng ngủ\", \"extra\": {\"unit_of_meas\": \"%\", \"dev_cla\": \"humidity\", \"stat_cla\": \"measurement\"}}, \"ldr\": {\"comp\": \"sensor\", \"obj\": \"c_m_bi_n__nh_s_ng\", \"name\": \"Cảm biến ánh sáng\", \"extra\": {\"unit_of_meas\": \"%\", \"icon\": \"mdi:brightness-5\", \"stat_cla\": \"measurement\"}}, \"flame\": {\"comp\": \"sensor\", \"obj\": \"m_c_l_a_b_p\", \"name\": \"Mức lửa bếp\", \"extra\": {\"unit_of_meas\": \"%\", \"icon\": \"mdi:fire\", \"stat_cla\": \"measurement\"}}, \"gaslvl\": {\"comp\": \"sensor\", \"obj\": \"kh__gas_b_p\", \"name\": \"Khí gas bếp\", \"extra\": {\"unit_of_meas\": \"%\", \"icon\": \"mdi:smoke-detector-variant\", \"stat_cla\": \"measurement\"}}, \"current\": {\"comp\": \"sensor\", \"obj\": \"d_ng_t_ng_5v\", \"name\": \"Dòng tổng 5V\", \"extra\": {\"unit_of_meas\": \"A\", \"dev_cla\": \"current\", \"stat_cla\": \"measurement\"}}, \"power\": {\"comp\": \"sensor\", \"obj\": \"c_ng_su_t_ti_u_th_\", \"name\": \"Công suất tiêu thụ\", \"extra\": {\"unit_of_meas\": \"W\", \"dev_cla\": \"power\", \"stat_cla\": \"measurement\"}}, \"cards\": {\"comp\": \"sensor\", \"obj\": \"s__th__h_p_l_\", \"name\": \"Số thẻ hợp lệ\", \"extra\": {\"icon\": \"mdi:card-account-details\", \"ent_cat\": \"diagnostic\"}}};\nconst REMOVED = [[\"light\", \"rgb_ph_ng_kh_ch\"], [\"light\", \"rgb_ph_ng_ng_\"]];\nconst PANEL = {\"enable\": [\"switch\", \"Bật mô phỏng\", \"switch.mo_phong_bat\", {\"icon\": \"mdi:chip\"}], \"temp\": [\"number\", \"Nhiệt độ phòng ngủ\", \"number.mo_phong_nhiet_do\", {\"min\": 10, \"max\": 45, \"step\": 0.5, \"unit_of_meas\": \"°C\", \"mode\": \"slider\", \"icon\": \"mdi:thermometer\"}], \"hum\": [\"number\", \"Độ ẩm phòng ngủ\", \"number.mo_phong_do_am\", {\"min\": 20, \"max\": 95, \"step\": 1, \"unit_of_meas\": \"%\", \"mode\": \"slider\", \"icon\": \"mdi:water-percent\"}], \"light\": [\"number\", \"Ánh sáng ngoài trời\", \"number.mo_phong_anh_sang\", {\"min\": 0, \"max\": 100, \"step\": 5, \"unit_of_meas\": \"%\", \"mode\": \"slider\", \"icon\": \"mdi:white-balance-sunny\"}], \"motion\": [\"switch\", \"Có người ở phòng khách\", \"switch.mo_phong_co_nguoi\", {\"icon\": \"mdi:walk\"}], \"fire\": [\"switch\", \"Có lửa ở bếp\", \"switch.mo_phong_co_lua\", {\"icon\": \"mdi:fire\"}], \"gas\": [\"number\", \"Khí gas trong bếp\", \"number.mo_phong_khi_gas\", {\"min\": 0, \"max\": 100, \"step\": 5, \"unit_of_meas\": \"%\", \"mode\": \"slider\", \"icon\": \"mdi:smoke-detector-variant\"}], \"uid\": [\"text\", \"UID thẻ để quẹt\", \"text.mo_phong_uid\", {\"min\": 0, \"max\": 32, \"icon\": \"mdi:card-text\"}], \"swipe\": [\"button\", \"Quẹt thẻ theo UID\", \"button.mo_phong_quet_uid\", {\"icon\": \"mdi:nfc-search-variant\"}], \"swipe_ok\": [\"button\", \"Quẹt thẻ hợp lệ\", \"button.mo_phong_quet_hop_le\", {\"icon\": \"mdi:card-account-details\"}], \"swipe_bad\": [\"button\", \"Quẹt thẻ lạ\", \"button.mo_phong_quet_the_la\", {\"icon\": \"mdi:card-remove\"}]};\nconst DEV = { ids: 'smarthome-sim', name: 'Smarthome', mf: 'Espressif', mdl: 'ESP32 ảo (Node-RED)', sw: 'mô phỏng' };\nconst PDEV = { ids: 'smarthome-sim-panel', name: 'Bảng mô phỏng ESP32', mf: 'Smarthome đồ án', mdl: 'Node-RED' };\nconst byObj = {};\nfor (const [k, e] of Object.entries(ENT)) byObj[e.comp + '/' + e.obj] = k;\n\nlet st = context.get('st');\nif (!st) {\n    st = { enabled: null, cards: [], sw: { buzzer: false, strip: false, fan: false, kitchen: false, porch: false, bedroom: false, auto: true },\n           door: false, servo: false, motion: false, fire: false, gas: false, gasPct: 5, dark: false,\n           temp: 27, hum: 65, light: 60, uid: '', wrong: 0, alarm: false, tag: '' };\n    context.set('st', st);\n}\nconst timers = context.get('timers') || {};\ncontext.set('timers', timers);\nconst outs = [];\nconst out = (topic, payload, retain = false) =>\n    outs.push({ topic, payload: typeof payload === 'string' ? payload : JSON.stringify(payload), retain, qos: 1 });\nconst T = (k, suffix) => `${P}/${ENT[k].comp}/${ENT[k].obj}/${suffix}`;\nconst pub = (k, v) => out(T(k, 'state'), String(v), true);      // ESPHome giữ (retain) trạng thái\nconst ppub = (k, v) => out(`${S}/${PANEL[k][0]}/${k}/state`, String(v), true);\nconst timer = (name, ms, fn) => { clearTimeout(timers[name]); timers[name] = setTimeout(() => { fn(); flush(); }, ms); };\nconst flush = () => { if (outs.length) { node.send([outs.splice(0)]); } };\nconst on = st => (st ? 'ON' : 'OFF');\nconst vnTs = () => new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 19) + '+0700';\nconst logAccess = (uid, result, method) => out('smarthome/event/access', { type: 'access', uid, result, method, ts: vnTs() });\nconst logEvent = (type, kind, state) => out(`smarthome/event/${type}`, { type, kind, state, ts: vnTs() });\n\n// ---------- discovery ----------\nfunction discovery() {\n    for (const [comp, obj] of REMOVED) out(`homeassistant/${comp}/smarthome/${obj}/config`, '', true);\n    for (const [k, e] of Object.entries(ENT)) {\n        const c = { name: e.name, uniq_id: 'ESP' + e.comp + e.obj, avty_t: `${P}/status`, dev: DEV, ...e.extra };\n        if (k === 'status') Object.assign(c, { stat_t: `${P}/status`, pl_on: 'online', pl_off: 'offline' });\n        else if (e.comp === 'button') Object.assign(c, { cmd_t: T(k, 'command'), pl_prs: 'PRESS' });\n        else if (e.comp === 'switch') Object.assign(c, { stat_t: T(k, 'state'), cmd_t: T(k, 'command'), pl_on: 'ON', pl_off: 'OFF' });\n        else if (e.comp === 'binary_sensor') Object.assign(c, { stat_t: T(k, 'state'), pl_on: 'ON', pl_off: 'OFF' });\n        else Object.assign(c, { stat_t: T(k, 'state') });\n        out(`homeassistant/${e.comp}/smarthome/${e.obj}/config`, c, true);\n    }\n    for (const [k, [comp, name, eid, extra]] of Object.entries(PANEL)) {\n        const c = { name, uniq_id: 'smarthome_sim_' + k, default_entity_id: eid, dev: PDEV, ...extra };\n        if (comp !== 'button') c.stat_t = `${S}/${comp}/${k}/state`;\n        c.cmd_t = `${S}/${comp}/${k}/command`;\n        if (comp === 'switch') Object.assign(c, { pl_on: 'ON', pl_off: 'OFF' });\n        if (comp === 'button') c.pl_prs = 'PRESS';\n        out(`homeassistant/${comp}/smarthome_sim/${k}/config`, c, true);\n    }\n}\nfunction panelStates() {\n    ppub('enable', on(st.enabled)); ppub('temp', st.temp); ppub('hum', st.hum); ppub('light', st.light);\n    ppub('motion', on(st.motion)); ppub('fire', on(st.fire)); ppub('gas', st.gasPct); ppub('uid', st.uid);\n}\n\n// ---------- mô phỏng thiết bị ----------\nfunction current() {\n    const s = st.sw;\n    let a = 0.18;                                                    // ESP32 + relay chờ\n    for (const k of ['strip', 'fan', 'kitchen', 'porch', 'bedroom']) if (s[k]) a += 0.07;   // cuộn relay\n    a += (s.strip ? 0.45 : 0) + (s.fan ? 0.15 : 0) + (s.kitchen ? 0.06 : 0) + (s.porch ? 0.02 : 0) + (s.bedroom ? 0.06 : 0);\n    a += (s.buzzer ? 0.03 : 0) + (st.servo ? 0.25 : 0) + 0.15;      // + sấy MQ-2 ~150 mA\n    a += (Math.random() - 0.5) * 0.02;\n    pub('current', a.toFixed(2)); pub('power', (a * 5).toFixed(2));\n}\nfunction setSw(k, v) { st.sw[k] = v; pub(k, on(v)); current(); }\nfunction alarmUpdate() { setSw('buzzer', st.fire || st.gas); }\nfunction sensors() {\n    pub('temp', st.temp.toFixed(1)); pub('hum', Math.round(st.hum));\n    pub('ldr', Math.round(st.light));                                 // % ánh sáng như firmware\n    if (st.light < 27 && !st.dark) { st.dark = true; pub('dark', 'ON'); }\n    else if (st.light > 36 && st.dark) { st.dark = false; pub('dark', 'OFF'); }\n    pub('flame', st.fire ? 85 : 0);\n    pub('gaslvl', Math.round(st.gasPct));\n    current();\n}\nfunction climate() {\n    if (!st.sw.auto) return;\n    if (st.temp > 30 && !st.sw.fan) setSw('fan', true);\n    else if (st.temp < 29 && st.sw.fan) setSw('fan', false);\n}\nfunction setDoor(open) {\n    if (st.door === open) return;\n    st.door = open; pub('door', on(open)); logEvent('door', 'main', open ? 'open' : 'closed');\n}\nfunction servoMove() { st.servo = true; current(); timer('servo', 1500, () => { st.servo = false; current(); }); }\nfunction beep(ms) { setSw('buzzer', true); timer('beep', ms, () => setSw('buzzer', false)); }\nfunction openDoor() {\n    beep(100); servoMove();\n    timer('doorOpen', 800, () => setDoor(true));\n    timer('doorClose', 6500, closeDoor);\n}\nfunction closeDoor() {\n    clearTimeout(timers.doorClose); clearTimeout(timers.doorOpen); servoMove();\n    timer('doorShut', 1200, () => setDoor(false));\n}\nfunction swipe(uid) {\n    uid = String(uid || '').trim().toUpperCase().replace(/:/g, '-');\n    if (!uid) return;\n    st.tag = uid; pub('tag', uid);\n    if (st.cards.includes(uid)) { st.wrong = 0; openDoor(); logAccess(uid, 'granted', 'rfid'); }\n    else if (++st.wrong >= 3) {\n        st.wrong = 0; logAccess(uid, 'lockout', 'rfid');\n        if (!st.alarm) { st.alarm = true; setSw('buzzer', true); timer('alarm', 4500, () => { st.alarm = false; alarmUpdate(); }); }\n    } else { beep(400); logAccess(uid, 'denied', 'rfid'); }\n}\nfunction motion(v) {\n    st.motion = v; pub('motion', on(v));\n    if (!st.sw.auto) return;\n    // như firmware: chỉ LED dây; đèn hiên do automation HA theo trời tối/sáng\n    if (v && st.dark) { clearTimeout(timers.lightsOff); setSw('strip', true); }\n    if (!v) timer('lightsOff', 30000, () => setSw('strip', false));\n}\nfunction fire(v) {\n    if (st.fire === v) return;\n    st.fire = v; pub('fire', on(v)); pub('flame', v ? 85 : 0);\n    logEvent('alarm', 'fire', v ? 'on' : 'off'); alarmUpdate();\n}\nfunction gasLevel(pct) {\n    st.gasPct = pct; pub('gaslvl', Math.round(pct));\n    const v = st.gas ? pct > 40 : pct > 50;                            // ngưỡng có trễ 50/40 % như firmware\n    if (v === st.gas) return;\n    st.gas = v; pub('gas', on(v)); logEvent('alarm', 'gas', v ? 'on' : 'off'); alarmUpdate();\n}\nfunction allStates() {\n    for (const k of ['buzzer', 'strip', 'fan', 'kitchen', 'porch', 'bedroom', 'auto']) pub(k, on(st.sw[k]));\n    pub('door', on(st.door)); pub('motion', on(st.motion)); pub('fire', on(st.fire)); pub('gas', on(st.gas)); pub('dark', on(st.dark));\n    pub('tag', st.tag); pub('cards', st.cards.length); sensors(); climate();\n}\nfunction setEnabled(v) {\n    st.enabled = v; ppub('enable', on(v));\n    if (v) { out(`${P}/status`, 'online', true); allStates(); node.status({ fill: 'green', shape: 'dot', text: 'ESP32 ảo đang chạy' }); }\n    else {\n        for (const t of Object.values(timers)) clearTimeout(t);\n        out(`${P}/status`, 'offline', true); node.status({ fill: 'grey', shape: 'ring', text: 'Đã tắt mô phỏng' });\n    }\n}\n\n// ---------- xử lý tin nhắn ----------\nconst t = msg.topic || '', p = String(msg.payload ?? '');\nconst parts = t.split('/');\nif (t === 'init') {\n    discovery(); panelStates();\n    if (st.enabled === null) setEnabled(true); else setEnabled(st.enabled);\n} else if (t === 'tick') {\n    if (st.enabled) sensors();\n} else if (t === 'homeassistant/status') {\n    if (p === 'online') { discovery(); panelStates(); if (st.enabled) { out(`${P}/status`, 'online', true); allStates(); } }\n} else if (t === 'smarthome/config/cards') {\n    st.cards = p === '-' || p === '' ? [] : p.split(',').map(s => s.trim()).filter(Boolean);\n    if (st.enabled) pub('cards', st.cards.length);\n} else if (parts[0] === S && parts[3] === 'state') {\n    // khôi phục giá trị bảng điều khiển (retained) sau khi Node-RED khởi động lại\n    const k = parts[2];\n    if (k === 'enable' && st.enabled === null) st.enabled = p === 'ON';\n    else if (k === 'temp' || k === 'hum' || k === 'light') st[k] = Number(p);\n    else if (k === 'gas') st.gasPct = Number(p);\n    else if (k === 'uid') st.uid = p;\n} else if (parts[0] === S && parts[3] === 'command') {\n    const k = parts[2];\n    if (k === 'enable') setEnabled(p === 'ON');\n    else if (k === 'uid') { st.uid = p; ppub('uid', p); }\n    else if (k === 'temp' || k === 'hum' || k === 'light') {\n        st[k] = Number(p); ppub(k, p);\n        if (st.enabled) { sensors(); if (k === 'temp') climate(); if (k === 'light' && st.motion) motion(true); }\n    } else if (k === 'motion') { st.motion = p === 'ON'; ppub('motion', p); if (st.enabled) motion(st.motion); }\n    else if (k === 'fire') { ppub('fire', p); if (st.enabled) fire(p === 'ON'); else st.fire = p === 'ON'; }\n    else if (k === 'gas') { ppub('gas', p); if (st.enabled) gasLevel(Number(p)); else st.gasPct = Number(p); }\n    else if (st.enabled && k === 'swipe') swipe(st.uid);\n    else if (st.enabled && k === 'swipe_ok') { if (st.cards.length) swipe(st.cards[0]); else node.warn('Chưa có thẻ hợp lệ nào'); }\n    else if (st.enabled && k === 'swipe_bad') swipe(Array.from({ length: 4 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('-'));\n} else if (st.enabled && t === 'smarthome/cmd/door') {\n    let j = {}; try { j = JSON.parse(p); } catch (e) {}\n    if (j.action === 'open') { openDoor(); logAccess(String(j.by || 'Điện thoại').slice(0, 32), 'granted', 'phone'); }\n} else if (st.enabled && parts[0] === P && parts[3] === 'command') {\n    const k = byObj[parts[1] + '/' + parts[2]];\n    if (!k) return null;\n    const comp = parts[1];\n    if (comp === 'switch') setSw(k, p === 'ON');\n    else if (comp === 'button') {\n        if (k === 'open') { openDoor(); logAccess('', 'granted', 'remote'); }\n        else if (k === 'close') closeDoor();\n    }\n}\nflush();\nreturn null;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 480,
+    "y": 240,
+    "wires": [
+      [
+        "sim_out"
+      ]
+    ]
+  },
+  {
+    "id": "sim_out",
+    "type": "mqtt out",
+    "z": "sim_tab",
+    "name": "MQTT",
+    "topic": "",
+    "qos": "",
+    "retain": "",
+    "respTopic": "",
+    "contentType": "",
+    "userProps": "",
+    "correl": "",
+    "expiry": "",
+    "broker": "sh_mqtt_broker",
+    "x": 690,
+    "y": 240,
+    "wires": []
+  }
+]

@@ -1,0 +1,64 @@
+{
+ "_viewbox": [
+  -20.0,
+  -55.0,
+  540.0,
+  430.0
+ ],
+ "cover.smarthome_cua": [
+  13.3,
+  15.6
+ ],
+ "switch.smarthome_coi": [
+  5.9,
+  29.1
+ ],
+ "binary_sensor.smarthome_chuyen_dong_truoc_nha": [
+  94.1,
+  30.2
+ ],
+ "switch.smarthome_den_phong_khach": [
+  90.7,
+  15.6
+ ],
+ "light.smarthome_den_rgb": [
+  55.6,
+  47.7
+ ],
+ "switch.smarthome_den_hien": [
+  17.6,
+  10.0
+ ],
+ "sensor.smarthome_the_vua_quet": [
+  27.4,
+  10.0
+ ],
+ "binary_sensor.smarthome_troi_toi": [
+  37.0,
+  10.0
+ ],
+ "binary_sensor.smarthome_bao_khi_gas_bep": [
+  5.9,
+  69.7
+ ],
+ "sensor.smarthome_muc_khi_gas": [
+  13.3,
+  69.8
+ ],
+ "binary_sensor.smarthome_bao_chay_bep": [
+  5.9,
+  78.3
+ ],
+ "switch.smarthome_quat_hut_phong_ngu": [
+  46.7,
+  75.2
+ ],
+ "sensor.smarthome_dht11": [
+  62.6,
+  92.9
+ ],
+ "switch.smarthome_den_phong_ngu": [
+  85.2,
+  92.6
+ ]
+}

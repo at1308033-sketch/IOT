@@ -1,0 +1,330 @@
+# View "Điều khiển" cho dashboard smarthome-doan — mỗi section là một phòng.
+# Thêm vào dashboard: python3 /config/smarthome/tools/add_view_dieu_khien.py
+# (hoặc Sửa dashboard → ⋮ → Trình chỉnh sửa YAML thô → dán vào mục views)
+title: Điều khiển
+path: dieu-khien
+icon: mdi:home-lightning-bolt
+type: sections
+max_columns: 3
+sections:
+  # ---------------- Tường trước / Cửa ----------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Tường trước / Cửa
+        icon: mdi:door
+        badges:
+          - type: entity
+            entity: binary_sensor.smarthome_ket_noi
+      - type: tile
+        entity: binary_sensor.smarthome_cua_chinh
+      - type: tile
+        entity: binary_sensor.smarthome_chuyen_dong_truoc_nha
+      # Mở / dừng / đóng cửa (mở xong tự đóng sau "Thời gian mở cửa")
+      - type: tile
+        entity: cover.smarthome_cua
+        name: Cửa
+        grid_options: { columns: 12 }
+        features:
+          - type: cover-open-close
+      - type: tile
+        entity: switch.smarthome_den_hien
+      - type: tile
+        entity: sensor.smarthome_cam_bien_anh_sang
+      - type: tile
+        entity: switch.smarthome_che_do_vang_nha
+        color: red
+      - type: tile
+        entity: binary_sensor.smarthome_bao_dong_dot_nhap
+      - type: tile
+        entity: sensor.smarthome_the_vua_quet
+        grid_options: { columns: 12 }
+      - type: history-graph
+        title: Ánh sáng & chuyển động 24 giờ
+        hours_to_show: 24
+        entities:
+          - sensor.smarthome_cam_bien_anh_sang
+          - binary_sensor.smarthome_chuyen_dong_truoc_nha
+          - binary_sensor.smarthome_troi_toi
+      - type: entities
+        title: Cài đặt
+        state_color: true
+        entities:
+          - binary_sensor.smarthome_troi_toi
+          - binary_sensor.smarthome_cua_bi_vuong
+          - number.smarthome_nguong_troi_toi
+          - number.smarthome_den_hien_tat_sau
+          - number.smarthome_thoi_gian_mo_cua
+          - switch.smarthome_che_do_tu_dong
+
+  # ---------------- Phòng khách ----------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Phòng khách
+        icon: mdi:sofa
+      - type: tile
+        entity: switch.smarthome_den_phong_khach
+      # Chạm vào thẻ → bánh xe chọn màu tùy ý; chạm biểu tượng → bật/tắt
+      - type: tile
+        name: Đèn RGB (khách + ngủ)
+        entity: light.smarthome_den_rgb
+        grid_options: { columns: 12 }
+        tap_action: { action: more-info }
+        icon_tap_action: { action: toggle }
+        features:
+          - type: light-brightness
+      # Màu nhanh (khi đang báo động, đèn do kịch bản báo động điều khiển)
+      - type: tile
+        name: Đỏ
+        entity: light.smarthome_den_rgb
+        icon: mdi:circle
+        color: red
+        hide_state: true
+        vertical: true
+        grid_options: { columns: 4 }
+        tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [255, 0, 0] }
+        icon_tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [255, 0, 0] }
+      - type: tile
+        name: Xanh lá
+        entity: light.smarthome_den_rgb
+        icon: mdi:circle
+        color: green
+        hide_state: true
+        vertical: true
+        grid_options: { columns: 4 }
+        tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [0, 255, 0] }
+        icon_tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [0, 255, 0] }
+      - type: tile
+        name: Xanh dương
+        entity: light.smarthome_den_rgb
+        icon: mdi:circle
+        color: blue
+        hide_state: true
+        vertical: true
+        grid_options: { columns: 4 }
+        tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [0, 0, 255] }
+        icon_tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [0, 0, 255] }
+      - type: tile
+        name: Vàng
+        entity: light.smarthome_den_rgb
+        icon: mdi:circle
+        color: yellow
+        hide_state: true
+        vertical: true
+        grid_options: { columns: 4 }
+        tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [255, 180, 0] }
+        icon_tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [255, 180, 0] }
+      - type: tile
+        name: Tím
+        entity: light.smarthome_den_rgb
+        icon: mdi:circle
+        color: purple
+        hide_state: true
+        vertical: true
+        grid_options: { columns: 4 }
+        tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [160, 0, 255] }
+        icon_tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [160, 0, 255] }
+      - type: tile
+        name: Trắng
+        entity: light.smarthome_den_rgb
+        icon: mdi:circle
+        color: white
+        hide_state: true
+        vertical: true
+        grid_options: { columns: 4 }
+        tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [255, 255, 255] }
+        icon_tap_action:
+          action: perform-action
+          perform_action: light.turn_on
+          target: { entity_id: light.smarthome_den_rgb }
+          data: { rgb_color: [255, 255, 255] }
+      - type: tile
+        entity: switch.smarthome_coi
+
+  # ---------------- Bếp ----------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Bếp
+        icon: mdi:stove
+      - type: tile
+        entity: binary_sensor.smarthome_bao_chay_bep
+      - type: tile
+        entity: binary_sensor.smarthome_bao_khi_gas_bep
+      - type: tile
+        entity: sensor.smarthome_muc_khi_gas
+      - type: tile
+        entity: number.smarthome_nguong_bao_gas
+        features:
+          - type: numeric-input
+            style: buttons
+      - type: tile
+        entity: button.smarthome_tat_bao_dong
+        color: red
+        grid_options: { columns: 12 }
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target: { entity_id: button.smarthome_tat_bao_dong }
+      - type: history-graph
+        title: Báo động 24 giờ
+        hours_to_show: 24
+        entities:
+          - binary_sensor.smarthome_bao_chay_bep
+          - binary_sensor.smarthome_bao_khi_gas_bep
+          - binary_sensor.smarthome_bao_dong_dot_nhap
+      - type: history-graph
+        title: Mức khí gas 6 giờ
+        hours_to_show: 6
+        entities:
+          - sensor.smarthome_muc_khi_gas
+          - number.smarthome_nguong_bao_gas
+
+  # ---------------- Phòng ngủ ----------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Phòng ngủ
+        icon: mdi:bed
+      - type: tile
+        entity: switch.smarthome_den_phong_ngu
+      - type: tile
+        entity: switch.smarthome_quat_hut_phong_ngu
+      - type: tile
+        entity: sensor.smarthome_nhiet_do_phong_ngu
+      - type: tile
+        entity: sensor.smarthome_do_am_phong_ngu
+      - type: entities
+        entities:
+          - number.smarthome_do_am_bat_quat
+      - type: history-graph
+        title: Nhiệt độ & độ ẩm 24 giờ
+        hours_to_show: 24
+        entities:
+          - sensor.smarthome_nhiet_do_phong_ngu
+          - sensor.smarthome_do_am_phong_ngu
+      - type: history-graph
+        title: Độ ẩm & quạt hút 12 giờ
+        hours_to_show: 12
+        entities:
+          - sensor.smarthome_do_am_phong_ngu
+          - switch.smarthome_quat_hut_phong_ngu
+
+  # ---------------- Năng lượng ----------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Năng lượng
+        icon: mdi:lightning-bolt
+      - type: tile
+        entity: sensor.smarthome_dong_tong_5v
+      - type: tile
+        entity: sensor.smarthome_cong_suat_tieu_thu
+      - type: tile
+        name: Điện năng hôm nay
+        entity: sensor.smarthome_dien_nang_hom_nay
+        grid_options: { columns: 12 }
+      - type: history-graph
+        title: Dòng & công suất 3 giờ
+        hours_to_show: 3
+        entities:
+          - sensor.smarthome_dong_tong_5v
+          - sensor.smarthome_cong_suat_tieu_thu
+      - type: statistics-graph
+        title: Điện năng theo ngày
+        chart_type: bar
+        period: day
+        days_to_show: 7
+        stat_types: [change]
+        entities:
+          - sensor.smarthome_dien_nang
+      - type: statistics-graph
+        title: Công suất trung bình 7 ngày
+        chart_type: line
+        period: hour
+        days_to_show: 7
+        stat_types: [mean, max]
+        entities:
+          - sensor.smarthome_cong_suat_tieu_thu
+      - type: entities
+        title: Hiệu chuẩn
+        entities:
+          - sensor.smarthome_dien_ap_acs712
+          - button.smarthome_hieu_chuan_acs712_0_a
+          - sensor.smarthome_wi_fi
+
+  # ---------------- Kiểm tra & hiệu chỉnh ----------------
+  - type: grid
+    cards:
+      - type: heading
+        heading: Kiểm tra & hiệu chỉnh
+        icon: mdi:wrench
+      - type: entities
+        title: Servo cửa (loại 360°)
+        state_color: true
+        entities:
+          - entity: number.smarthome_thu_servo_2_giay
+            name: Thử servo 2 giây (−100…100, 0 = đứng yên)
+          - entity: number.smarthome_thoi_gian_quay_mo
+            name: Thời gian quay mở (góc mở)
+          - entity: binary_sensor.smarthome_cua_chinh
+            name: Công tắc từ cửa
+          - entity: binary_sensor.smarthome_cua_bi_vuong
+      - type: entities
+        title: Thẻ RFID
+        entities:
+          - entity: sensor.smarthome_the_vua_quet
+          - entity: sensor.smarthome_so_the_hop_le
+          - entity: script.smarthome_doan_lay_the_vua_quet
+            name: Lấy UID thẻ vừa quẹt
+          - entity: input_text.smarthome_card_uid
+            name: UID thẻ
+          - entity: input_text.smarthome_card_name
+            name: Tên chủ thẻ
+          - entity: script.smarthome_doan_them_the
+            name: Thêm thẻ
