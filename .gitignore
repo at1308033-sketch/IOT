@@ -1,0 +1,25 @@
+# Bí mật và dữ liệu máy chủ — không bao giờ đưa lên repo
+secrets.yaml
+**/secrets.yaml
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.log.*
+flows_cred.json
+.storage/
+.esphome/
+.device-builder*
+*.pem
+*.key
+*.crt
+
+# Bản sao lưu
+*.bak-*
+*backup*
+
+# Môi trường build
+node_modules/
+__pycache__/
+.pytest_cache/
+smarthome/tools/.pylib/
